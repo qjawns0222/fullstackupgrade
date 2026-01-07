@@ -3,11 +3,15 @@ package com.example.demo.controller;
 import java.util.List;
 
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.example.demo.entity.User;
 import com.example.demo.repository.PostRepository;
+
+import jakarta.validation.Valid;
 
 @RestController
 @RequestMapping("/api")
@@ -24,8 +28,8 @@ public class TestController {
         return "Test Controller Working!";
     }
 
-    @GetMapping("/getUser")
-    public List<User> getUser() {
+    @PostMapping("/getUser")
+    public List<User> getUser(@Valid @RequestBody User user) {
         return postRepository.searchByCondition();
     }
 }

@@ -1,14 +1,19 @@
 'use client';
 
-import React, { useState } from 'react';
+import React from 'react';
+import { useForm, SubmitHandler } from 'react-hook-form';
+
+import { LoginFormInputs } from '@/types/LoginFormInputs';
 
 export default function LoginPage() {
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
+    const {
+        register,
+        handleSubmit,
+        formState: { errors }
+    } = useForm<LoginFormInputs>();
 
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        console.log('Login attempt:', email);
+    const onSubmit: SubmitHandler<LoginFormInputs> = (data) => {
+        console.log('Login attempt:', data);
     };
 
     return (
@@ -23,7 +28,7 @@ export default function LoginPage() {
                     </p>
                 </div>
 
-                <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
+                <form className="mt-8 space-y-6" onSubmit={handleSubmit(onSubmit)}>
                     <div className="space-y-4">
                         <div>
                             <label htmlFor="email" className="block text-sm font-medium text-gray-700">
@@ -32,15 +37,29 @@ export default function LoginPage() {
                             <div className="mt-1">
                                 <input
                                     id="email"
-                                    name="email"
-                                    type="email"
-                                    autoComplete="email"
-                                    required
-                                    value={email}
-                                    onChange={(e) => setEmail(e.target.value)}
-                                    className="block w-full rounded-md border-0 py-2.5 px-3 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6 transition-all"
+
+
                                     placeholder="name@example.com"
+                                    {...register("email", {
+                                        required: "이메일을 입력해주세요222.",
+                                        pattern: {
+                                            value: /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i,
+                                            message: "유효한 이메일 형식이 아닙니다.222"
+                                        }
+                                    })}
+                                    className={`
+                                        block w-full rounded-md border-0 py-2.5 px-3 shadow-sm ring-1 ring-inset sm:text-sm sm:leading-6 transition-all outline-none
+                                        ${errors.email
+                                            ? 'ring-red-500 text-red-900 focus:ring-2 focus:ring-red-500 placeholder:text-red-300'
+                                            : 'ring-gray-300 text-gray-900 focus:ring-2 focus:ring-indigo-600'
+                                        }
+                                    `}
                                 />
+                                {errors.email && (
+                                    <p className="mt-1 text-sm text-red-600">
+                                        {errors.email.message}
+                                    </p>
+                                )}
                             </div>
                         </div>
 
@@ -51,14 +70,24 @@ export default function LoginPage() {
                             <div className="mt-1">
                                 <input
                                     id="password"
-                                    name="password"
                                     type="password"
                                     autoComplete="current-password"
-                                    required
-                                    value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
-                                    className="block w-full rounded-md border-0 py-2.5 px-3 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6 transition-all"
+                                    {...register("password", {
+                                        required: "비밀번호를 입력해주세요."
+                                    })}
+                                    className={`
+                                        block w-full rounded-md border-0 py-2.5 px-3 shadow-sm ring-1 ring-inset sm:text-sm sm:leading-6 transition-all outline-none
+                                        ${errors.password
+                                            ? 'ring-red-500 text-red-900 focus:ring-2 focus:ring-red-500 placeholder:text-red-300'
+                                            : 'ring-gray-300 text-gray-900 focus:ring-2 focus:ring-indigo-600'
+                                        }
+                                    `}
                                 />
+                                {errors.password && (
+                                    <p className="mt-1 text-sm text-red-600">
+                                        {errors.password.message}
+                                    </p>
+                                )}
                             </div>
                         </div>
                     </div>
