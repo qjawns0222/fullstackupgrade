@@ -1,3 +1,15 @@
 spring:
   application:
     name: demo
+  datasource:
+    driver-class-name: org.mariadb.jdbc.Driver
+    url: jdbc:mariadb://localhost:3306/study_db?serverTimezone=UTC&characterEncoding=UTF-8
+    username: root     # DB 아이디
+    password: root     # DB 비밀번호
+  jpa:
+    hibernate:
+      ddl-auto: update # DB 스키마 자동 생성 (운영에선 validate 또는 none 사용)
+    properties:
+      hibernate:
+        format_sql: true # SQL 예쁘게 출력
+        show_sql: true   # SQL 로그에 
