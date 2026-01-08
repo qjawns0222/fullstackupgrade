@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { useForm, SubmitHandler } from 'react-hook-form';
-
+import api from '@/lib/axios';
 import { LoginFormInputs } from '@/types/LoginFormInputs';
 
 export default function LoginPage() {
@@ -12,8 +12,13 @@ export default function LoginPage() {
         formState: { errors }
     } = useForm<LoginFormInputs>();
 
-    const onSubmit: SubmitHandler<LoginFormInputs> = (data) => {
-        console.log('Login attempt:', data);
+    const onSubmit: SubmitHandler<LoginFormInputs> = async (data) => {
+        try {
+            await api.post('/login', data);
+        } catch (error) {
+            // No need to manually show alert/toast here
+            // The interceptor has already triggered the global toast
+        }
     };
 
     return (
