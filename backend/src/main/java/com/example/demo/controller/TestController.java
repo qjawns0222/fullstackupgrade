@@ -32,8 +32,8 @@ public class TestController {
 
     @PostMapping("/getUser")
     public List<User> getUser(@Valid @RequestBody User user) {
-        throw new BusinessException(ErrorCode.INVALID_INPUT_VALUE);
-        // return postRepository.searchByCondition();
+        // throw new BusinessException(ErrorCode.INVALID_INPUT_VALUE);
+        return postRepository.searchByCondition();
 
     }
 }

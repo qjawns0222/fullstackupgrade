@@ -4,6 +4,7 @@ import React from 'react';
 import { useForm, SubmitHandler } from 'react-hook-form';
 import api from '@/lib/axios';
 import { LoginFormInputs } from '@/types/LoginFormInputs';
+import { useQuery } from '@tanstack/react-query';
 
 export default function LoginPage() {
     const {
@@ -12,8 +13,31 @@ export default function LoginPage() {
         formState: { errors }
     } = useForm<LoginFormInputs>();
 
+    const fetchUsers = async () => {
+        const response = await api.post('/getUser', {
+            "username": "testuser1234",
+            "password": "222222",
+            "role": "ADMIN"
+        });
+        console.log(response);
+        return response.data;
+    };
+
+    const {
+        data,
+        isLoading,
+        isError,
+        refetch // 👈 이게 바로 수동 실행 스위치입니다.
+    } = useQuery({
+        queryKey: ['users-search'],
+        queryFn: fetchUsers,
+        enabled: false, // 👈 중요: 컴포넌트 마운트 시 자동 실행 금지 (꺼짐 상태)
+    });
+
     const onSubmit: SubmitHandler<LoginFormInputs> = async (data) => {
         try {
+            console.log("here")
+            refetch()
             await api.post('/login', data);
         } catch (error) {
             // No need to manually show alert/toast here
