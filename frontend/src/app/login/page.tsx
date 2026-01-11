@@ -31,7 +31,7 @@ export default function LoginPage() {
     } = useQuery({
         queryKey: ['users-search'],
         queryFn: fetchUsers,
-        enabled: false, // 👈 중요: 컴포넌트 마운트 시 자동 실행 금지 (꺼짐 상태)
+        enabled: true, // 👈 중요: 컴포넌트 마운트 시 자동 실행 금지 (꺼짐 상태)
     });
 
     const onSubmit: SubmitHandler<LoginFormInputs> = async (data) => {
