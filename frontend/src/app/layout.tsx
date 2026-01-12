@@ -4,6 +4,7 @@ import "./globals.css";
 import Header from "@/components/Header";
 import { ToastContainer } from "@/components/ui/ToastContainer";
 import QueryProvider from "@/providers/QueryProvider";
+import { NotificationListener } from "@/components/NotificationListener";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -32,6 +33,7 @@ export default function RootLayout({
       >
         <QueryProvider>
           <Header />
+          <NotificationListener />
           <main className="pt-16">
             {children}
           </main>

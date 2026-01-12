@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class AiAnalysisEventListener {
 
     private final AnalysisRequestRepository repository;
+    private final com.example.demo.repository.SseEmitters sseEmitters;
 
     @Async
     @EventListener
@@ -37,6 +38,9 @@ public class AiAnalysisEventListener {
             String mockResult = "AI Analysis Result for " + request.getOriginalFileName() + ": Success! (Mock Data)";
             request.complete(mockResult);
             log.info("AI Analysis Completed for Request ID: {}", requestId);
+
+            // Send SSE Notification
+            sseEmitters.send("Analysis Completed for Request ID: " + requestId);
 
         } catch (InterruptedException e) {
             log.error("Analysis interrupted", e);
