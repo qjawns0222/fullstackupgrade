@@ -18,9 +18,11 @@ public class NotificationController {
     private final SseEmitters sseEmitters;
 
     @GetMapping(value = "/subscribe", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter subscribe() {
+    public SseEmitter subscribe(java.security.Principal principal) {
+        String username = (principal != null) ? principal.getName() : "anonymous";
+
         // Timeout: 60 seconds (can be adjusted)
         SseEmitter emitter = new SseEmitter(60 * 1000L);
-        return sseEmitters.add(emitter);
+        return sseEmitters.add(username, emitter);
     }
 }

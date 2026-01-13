@@ -16,7 +16,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class AiAnalysisEventListener {
 
     private final AnalysisRequestRepository repository;
-    private final com.example.demo.repository.SseEmitters sseEmitters;
+    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+    private final org.springframework.data.redis.listener.ChannelTopic topic;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     @Async
     @EventListener
@@ -39,8 +41,14 @@ public class AiAnalysisEventListener {
             request.complete(mockResult);
             log.info("AI Analysis Completed for Request ID: {}", requestId);
 
-            // Send SSE Notification
-            sseEmitters.send("Analysis Completed for Request ID: " + requestId);
+            // Publish to Redis
+            java.util.Map<String, String> message = new java.util.HashMap<>();
+            message.put("username", event.getUsername());
+            message.put("content", "Analysis Completed for Request ID: " + requestId);
+
+            String jsonMessage = objectMapper.writeValueAsString(message);
+            redisTemplate.convertAndSend(topic.getTopic(), jsonMessage);
+            log.info("Published notification to Redis for user: {}", event.getUsername());
 
         } catch (InterruptedException e) {
             log.error("Analysis interrupted", e);

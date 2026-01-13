@@ -21,13 +21,16 @@ public class AnalysisController {
     private final ApplicationEventPublisher eventPublisher;
 
     @PostMapping
-    public ResponseEntity<Map<String, Object>> uploadFile(@RequestParam("file") MultipartFile file) {
+    public ResponseEntity<Map<String, Object>> uploadFile(@RequestParam("file") MultipartFile file,
+            java.security.Principal principal) {
         // 1. Save initial record
         AnalysisRequest request = new AnalysisRequest(file.getOriginalFilename());
         AnalysisRequest savedRequest = repository.save(request);
 
+        String username = (principal != null) ? principal.getName() : "anonymous";
+
         // 2. Publish event (Async processing starts here)
-        eventPublisher.publishEvent(new AiAnalysisEvent(savedRequest.getId()));
+        eventPublisher.publishEvent(new AiAnalysisEvent(savedRequest.getId(), username));
 
         // 3. Return ID immediately
         Map<String, Object> response = new HashMap<>();

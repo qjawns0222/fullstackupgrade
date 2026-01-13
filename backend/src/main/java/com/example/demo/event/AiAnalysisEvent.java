@@ -7,4 +7,5 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class AiAnalysisEvent {
     private final Long analysisRequestId;
+    private final String username;
 }
