@@ -1,8 +1,13 @@
 package com.example.demo.listener
 
+import com.example.demo.entity.Resume
 import com.example.demo.event.AiAnalysisEvent
+import com.example.demo.event.ResumeSearchEvent
 import com.example.demo.repository.AnalysisRequestRepository
+import com.example.demo.repository.ResumeRepository
+import com.example.demo.repository.UserRepository
 import com.fasterxml.jackson.databind.ObjectMapper
+import org.springframework.context.ApplicationEventPublisher
 import org.slf4j.LoggerFactory
 import org.springframework.context.event.EventListener
 import org.springframework.data.redis.core.StringRedisTemplate
@@ -14,9 +19,12 @@ import org.springframework.transaction.annotation.Transactional
 @Component
 class AiAnalysisEventListener(
     private val repository: AnalysisRequestRepository,
+    private val resumeRepository: ResumeRepository,
+    private val userRepository: UserRepository,
     private val redisTemplate: StringRedisTemplate,
     private val topic: ChannelTopic,
-    private val objectMapper: ObjectMapper
+    private val objectMapper: ObjectMapper,
+    private val eventPublisher: ApplicationEventPublisher
 ) {
 
     private val log = LoggerFactory.getLogger(AiAnalysisEventListener::class.java)
@@ -40,7 +48,23 @@ class AiAnalysisEventListener(
 
             val mockResult = "AI Analysis Result for " + request.originalFileName + ": Success! (Mock Data)"
             request.complete(mockResult)
+            repository.saveAndFlush(request) // Save completed state
             log.info("AI Analysis Completed for Request ID: {}", requestId)
+
+            // Create and Save Resume Entity
+            val user = userRepository.findByUsername(event.username)
+                .orElseThrow { RuntimeException("User not found: ${event.username}") }
+
+            val resume = Resume(
+                originalFileName = request.originalFileName,
+                content = request.result,
+                user = user
+            )
+            resumeRepository.save(resume)
+            log.info("Saved Resume Entity for User: {}", event.username)
+
+            // Publish ResumeSearchEvent with Resume ID
+            eventPublisher.publishEvent(ResumeSearchEvent(resume.id!!))
 
             // Publish to Redis
             val message: MutableMap<String, String> = HashMap()
@@ -59,7 +83,5 @@ class AiAnalysisEventListener(
             log.error("Analysis failed", e)
             request.fail("Error: " + e.message)
         }
-
-        // Transactional will handle saving the final state (complete/fail)
     }
 }
