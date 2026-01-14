@@ -1,0 +1,18 @@
+version: '3.8'
+services:
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    container_name: redis-server
+
+  elasticsearch:
+    build:
+      context: .
+      dockerfile: Dockerfile-es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+    container_name: elasticsearch
