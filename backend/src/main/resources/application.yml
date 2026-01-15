@@ -1,4 +1,7 @@
 spring:
+  messages:
+    encoding: UTF-8
+    always-use-message-format: true
   application:
     name: demo
   data:
@@ -17,3 +20,6 @@ spring:
       hibernate:
         format_sql: true # SQL 예쁘게 출력
         show_sql: true   # SQL 로그에 
+  
+jwt:
+  secret: DisIsVerySecretKeyForJwtExampleProjectMustBeLongerThan256BitsVoila

@@ -4,44 +4,39 @@ import React from 'react';
 import { useForm, SubmitHandler } from 'react-hook-form';
 import api from '@/lib/axios';
 import { LoginFormInputs } from '@/types/LoginFormInputs';
-import { useQuery } from '@tanstack/react-query';
+import { useRouter } from 'next/navigation';
 
 export default function LoginPage() {
+    const router = useRouter();
     const {
         register,
         handleSubmit,
         formState: { errors }
     } = useForm<LoginFormInputs>();
 
-    const fetchUsers = async () => {
-        const response = await api.post('/getUser', {
-            "username": "testuser1234",
-            "password": "222222",
-            "role": "ADMIN"
-        });
-        console.log(response);
-        return response.data;
-    };
-
-    const {
-        data,
-        isLoading,
-        isError,
-        refetch // 👈 이게 바로 수동 실행 스위치입니다.
-    } = useQuery({
-        queryKey: ['users-search'],
-        queryFn: fetchUsers,
-        enabled: true, // 👈 중요: 컴포넌트 마운트 시 자동 실행 금지 (꺼짐 상태)
-    });
-
     const onSubmit: SubmitHandler<LoginFormInputs> = async (data) => {
         try {
-            console.log("here")
-            refetch()
-            await api.post('/login', data);
+            // /api/auth/login 호출 (axios baseURL이 /api라고 가정 시 /auth/login)
+            // 백엔드 Controller가 /api/auth/login 이므로 baseURL이 /api라면 /auth/login이 맞음
+            const response = await api.post('/auth/login', {
+                username: data.email, // 백엔드 LoginRequest가 username 필드를 사용함
+                password: data.password
+            });
+
+            const { accessToken, refreshToken } = response.data;
+
+            // 토큰 저장
+            localStorage.setItem('accessToken', accessToken);
+            localStorage.setItem('refreshToken', refreshToken);
+
+            // 헤더 설정 (다음 요청부터 적용)
+            api.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`;
+
+            // 메인 페이지 또는 대시보드로 이동
+            router.push('/');
         } catch (error) {
-            // No need to manually show alert/toast here
-            // The interceptor has already triggered the global toast
+            // 에러 처리는 Axios Interceptor가 토스트를 띄워줌
+            console.error("Login Failed", error);
         }
     };
 
@@ -61,19 +56,17 @@ export default function LoginPage() {
                     <div className="space-y-4">
                         <div>
                             <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-                                이메일
+                                아이디
                             </label>
                             <div className="mt-1">
                                 <input
                                     id="email"
-
-
-                                    placeholder="name@example.com"
+                                    placeholder="Username"
                                     {...register("email", {
-                                        required: "이메일을 입력해주세요222.",
-                                        pattern: {
-                                            value: /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i,
-                                            message: "유효한 이메일 형식이 아닙니다.222"
+                                        required: "아이디를 입력해주세요.",
+                                        minLength: {
+                                            value: 4,
+                                            message: "아이디는 4자 이상이어야 합니다."
                                         }
                                     })}
                                     className={`

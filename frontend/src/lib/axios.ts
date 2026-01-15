@@ -1,19 +1,23 @@
-import axios, { AxiosError } from 'axios';
+import axios, { AxiosError, AxiosRequestConfig } from 'axios';
 import { dispatchToast } from './toast-event';
 
 const api = axios.create({
-    baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api', // 백엔드 API 주소 확인 필요
+    baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api',
     timeout: 10000,
     headers: {
         'Content-Type': 'application/json',
     },
 });
 
-// 요청 인터셉터 (필요 시 토큰 추가 등)
+// 요청 인터셉터
 api.interceptors.request.use(
     (config) => {
-        // 예: const token = localStorage.getItem('token');
-        // if (token) config.headers.Authorization = `Bearer ${token}`;
+        if (typeof window !== 'undefined') {
+            const token = localStorage.getItem('accessToken');
+            if (token) {
+                config.headers.Authorization = `Bearer ${token}`;
+            }
+        }
         return config;
     },
     (error) => {
@@ -21,29 +25,105 @@ api.interceptors.request.use(
     }
 );
 
+let isRefreshing = false;
+let failedQueue: any[] = [];
+
+const processQueue = (error: any, token: string | null = null) => {
+    failedQueue.forEach((prom) => {
+        if (error) {
+            prom.reject(error);
+        } else {
+            prom.resolve(token);
+        }
+    });
+    failedQueue = [];
+};
+
 // 응답 인터셉터
 api.interceptors.response.use(
     (response) => {
         return response;
     },
-    (error: AxiosError) => {
-        let message = '알 수 없는 오류가 발생했습니다.';
+    async (error: AxiosError) => {
+        const originalRequest = error.config as AxiosRequestConfig & { _retry?: boolean };
 
+        if (error.response?.status === 401 && !originalRequest._retry) {
+            if (isRefreshing) {
+                return new Promise((resolve, reject) => {
+                    failedQueue.push({ resolve, reject });
+                })
+                    .then((token) => {
+                        if (originalRequest.headers) {
+                            originalRequest.headers.Authorization = `Bearer ${token}`;
+                        }
+                        return api(originalRequest);
+                    })
+                    .catch((err) => {
+                        return Promise.reject(err);
+                    });
+            }
+
+            originalRequest._retry = true;
+            isRefreshing = true;
+
+            try {
+                const refreshToken = localStorage.getItem('refreshToken');
+                if (!refreshToken) {
+                    throw new Error('No refresh token available');
+                }
+
+                // 토큰 재발급 요청 (axios 인스턴스가 아닌 기본 axios 사용)
+                // baseURL이 다를 수 있으므로 풀 URL 사용 추천하나, 여기서는 환경변수나 하드코딩 사용
+                const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api';
+                const { data } = await axios.post(`${baseURL}/auth/reissue`, {}, {
+                    headers: { Authorization: refreshToken }
+                });
+
+                const { accessToken, refreshToken: newRefreshToken } = data;
+                localStorage.setItem('accessToken', accessToken);
+                localStorage.setItem('refreshToken', newRefreshToken);
+
+                api.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`;
+
+                processQueue(null, accessToken);
+
+                if (originalRequest.headers) {
+                    originalRequest.headers.Authorization = `Bearer ${accessToken}`;
+                }
+
+                return api(originalRequest);
+            } catch (err) {
+                processQueue(err, null);
+
+                localStorage.removeItem('accessToken');
+                localStorage.removeItem('refreshToken');
+
+                // 로그인 페이지로 리다이렉트
+                if (typeof window !== 'undefined') {
+                    window.location.href = '/login';
+                }
+
+                return Promise.reject(err);
+            } finally {
+                isRefreshing = false;
+            }
+        }
+
+        let message = '알 수 없는 오류가 발생했습니다.';
         if (error.response) {
-            // 서버에서 응답이 왔으나 상태 코드가 2xx가 아님
             const data = error.response.data as any;
-            // 백엔드 에러 응답 구조에 따라 조정 필요
             message = data?.message || data?.error || `오류: ${error.response.statusText}`;
         } else if (error.request) {
-            // 요청은 갔으나 응답이 없음
             message = '서버로부터 응답이 없습니다. 네트워크를 확인해주세요.';
         } else {
-            // 요청 설정 중 오류 발생
             message = error.message;
         }
 
-        // 냉철하게 에러 토스트 발생
-        dispatchToast(message, 'error');
+        // 401 에러가 아니고, 리프레시 로직에서 처리되지 않은 에러만 토스트 표시
+        // (리프레시 실패 시에는 로그인 페이지로 이동하므로 토스트 굳이 안 띄워도 됨, 혹은 띄워도 됨)
+        if (error.response?.status !== 401) {
+            dispatchToast(message, 'error');
+        }
 
         return Promise.reject(error);
     }

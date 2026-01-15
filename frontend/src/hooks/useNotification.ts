@@ -3,7 +3,12 @@ import { dispatchToast } from '@/lib/toast-event';
 
 export const useNotification = () => {
     useEffect(() => {
-        const eventSource = new EventSource('http://localhost:8080/api/notifications/subscribe');
+        const token = localStorage.getItem('accessToken');
+        const url = token
+            ? `http://localhost:8080/api/notifications/subscribe?token=${token}`
+            : 'http://localhost:8080/api/notifications/subscribe';
+
+        const eventSource = new EventSource(url);
 
         eventSource.onopen = () => {
             console.log('SSE Connected');
