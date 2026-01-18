@@ -2,8 +2,11 @@ package com.example.demo.config
 
 import com.example.demo.entity.Resume
 import com.example.demo.entity.TrendStats
+import com.example.demo.listener.JobCompletionNotificationListener
 import com.example.demo.repository.ResumeRepository
 import com.example.demo.repository.TrendStatsRepository
+import com.example.demo.repository.UserRepository
+import com.example.demo.service.MailService
 import java.util.concurrent.ConcurrentHashMap
 import org.springframework.batch.core.Job
 import org.springframework.batch.core.Step
@@ -26,7 +29,10 @@ class BatchConfig(
         private val jobRepository: JobRepository,
         private val transactionManager: PlatformTransactionManager,
         private val resumeRepository: ResumeRepository,
-        private val trendStatsRepository: TrendStatsRepository
+        private val trendStatsRepository: TrendStatsRepository,
+        private val jobCompletionNotificationListener: JobCompletionNotificationListener,
+        private val userRepository: UserRepository,
+        private val mailService: MailService
 ) {
 
     // Shared state for the job execution to accumulate counts
@@ -54,6 +60,8 @@ class BatchConfig(
         return JobBuilder("techTrendJob", jobRepository)
                 .start(trendAnalysisStep())
                 .next(saveTrendStatsStep())
+                .next(sendNotificationStep())
+                .listener(jobCompletionNotificationListener)
                 .build()
     }
 
@@ -124,6 +132,45 @@ class BatchConfig(
                 techStackCounts.clear()
             }
             RepeatStatus.FINISHED
+        }
+    }
+
+    // === Email Notification Step ===
+
+    @Bean
+    fun sendNotificationStep(): Step {
+        return StepBuilder("sendNotificationStep", jobRepository)
+                .chunk<com.example.demo.entity.User, com.example.demo.entity.User>(
+                        10,
+                        transactionManager
+                ) // Chunk size 10 to throttle emails
+                .reader(userReader())
+                .writer(emailWriter())
+                .build()
+    }
+
+    @Bean
+    fun userReader(): RepositoryItemReader<com.example.demo.entity.User> {
+        return RepositoryItemReaderBuilder<com.example.demo.entity.User>()
+                .name("userReader")
+                .repository(userRepository)
+                .methodName("findAll")
+                .pageSize(10)
+                .sorts(mapOf("id" to Sort.Direction.ASC))
+                .build()
+    }
+
+    @Bean
+    fun emailWriter(): ItemWriter<com.example.demo.entity.User> {
+        return ItemWriter { users ->
+            // Fetch latest trends once per chunk to send in email
+            val latestTrends = trendStatsRepository.findTop12ByOrderByRecordedAtDesc()
+            users.forEach { user ->
+                val email = user.email
+                if (!email.isNullOrBlank()) {
+                    mailService.sendWeeklyReport(email, user.username ?: "User", latestTrends)
+                }
+            }
         }
     }
 }

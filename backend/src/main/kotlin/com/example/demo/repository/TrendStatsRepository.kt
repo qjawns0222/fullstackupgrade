@@ -4,4 +4,7 @@ import com.example.demo.entity.TrendStats
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.stereotype.Repository
 
-@Repository interface TrendStatsRepository : JpaRepository<TrendStats, Long>
+@Repository
+interface TrendStatsRepository : JpaRepository<TrendStats, Long> {
+    fun findTop12ByOrderByRecordedAtDesc(): List<TrendStats>
+}

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>Weekly Tech Trend Report</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            color: #333;
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            width: 100%;
+            max-width: 600px;
+            margin: 0 auto;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .header {
+            background-color: #2c3e50;
+            color: #ffffff;
+            padding: 20px;
+            text-align: center;
+        }
+        .content {
+            padding: 20px;
+        }
+        .trend-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        .trend-table th, .trend-table td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        .trend-table th {
+            background-color: #f2f2f2;
+        }
+        .footer {
+            background-color: #f9f9f9;
+            color: #777;
+            padding: 10px;
+            text-align: center;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Weekly Tech Trend Report</h1>
+        </div>
+        <div class="content">
+            <p>안녕하세요, <span th:text="${username}">User</span>님!</p>
+            <p>이번 주 기술 트렌드 분석 리포트입니다.</p>
+            
+            <h3>Top Tech Keywords</h3>
+            <table class="trend-table">
+                <thead>
+                    <tr>
+                        <th>Tech Stack</th>
+                        <th>Count</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="trend : ${trends}">
+                        <td th:text="${trend.techStack}">Java</td>
+                        <td th:text="${trend.count}">120</td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <p style="margin-top: 20px;">
+                더 자세한 내용은 대시보드를 확인해주세요.
+            </p>
+        </div>
+        <div class="footer">
+            <p>&copy; 2026 Tech Trend Analysis Team. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>

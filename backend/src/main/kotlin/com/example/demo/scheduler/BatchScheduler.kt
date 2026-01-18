@@ -12,7 +12,8 @@ import org.springframework.scheduling.annotation.Scheduled
 @EnableScheduling
 class BatchScheduler(private val jobLauncher: JobLauncher, private val techTrendJob: Job) {
 
-    @Scheduled(cron = "0 0/1 * * * *") // Runs every hour at minute 0
+    // Runs every Monday at 09:00 AM
+    @Scheduled(cron = "0 0/1 * * * ?")
     fun runTechTrendJob() {
         val jobParameters =
                 JobParametersBuilder()
