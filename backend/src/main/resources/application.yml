@@ -20,6 +20,9 @@ spring:
       hibernate:
         format_sql: true # SQL 예쁘게 출력
         show_sql: true   # SQL 로그에 
+  batch:
+    jdbc:
+      initialize-schema: always # 스프링 배치 메타 테이블 자동 생성
   
 jwt:
   secret: DisIsVerySecretKeyForJwtExampleProjectMustBeLongerThan256BitsVoila
