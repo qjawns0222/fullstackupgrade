@@ -33,7 +33,8 @@ class SecurityConfig(private val jwtTokenProvider: JwtTokenProvider) {
                 .cors { it.configurationSource(corsConfigurationSource()) }
                 .sessionManagement { it.sessionCreationPolicy(SessionCreationPolicy.STATELESS) }
                 .authorizeHttpRequests { auth ->
-                    auth.requestMatchers("/api/auth/**").permitAll().anyRequest().authenticated()
+                    auth.requestMatchers("/api/auth/**", "/actuator/**").permitAll()
+                    auth.anyRequest().authenticated()
                 }
                 .addFilterBefore(
                         JwtAuthenticationFilter(jwtTokenProvider),

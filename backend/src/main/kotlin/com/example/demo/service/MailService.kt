@@ -14,7 +14,8 @@ import org.thymeleaf.spring6.SpringTemplateEngine
 @Service
 class MailService(
         private val javaMailSender: JavaMailSender,
-        private val templateEngine: SpringTemplateEngine
+        private val templateEngine: SpringTemplateEngine,
+        private val meterRegistry: io.micrometer.core.instrument.MeterRegistry
 ) {
 
     private val logger = LoggerFactory.getLogger(MailService::class.java)
@@ -38,10 +39,20 @@ class MailService(
             helper.setText(htmlContent, true)
 
             javaMailSender.send(mimeMessage)
+
+            meterRegistry
+                    .counter("mail.sent", "type", "weekly_report", "status", "success")
+                    .increment()
             logger.info("Successfully sent weekly report to $email")
         } catch (e: MessagingException) {
+            meterRegistry
+                    .counter("mail.sent", "type", "weekly_report", "status", "failure")
+                    .increment()
             logger.error("Failed to send email to $email", e)
         } catch (e: Exception) {
+            meterRegistry
+                    .counter("mail.sent", "type", "weekly_report", "status", "failure")
+                    .increment()
             logger.error("Unexpected error sending email to $email", e)
         }
     }

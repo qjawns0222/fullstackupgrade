@@ -10,7 +10,11 @@ import org.springframework.scheduling.annotation.Scheduled
 
 @Configuration
 @EnableScheduling
-class BatchScheduler(private val jobLauncher: JobLauncher, private val techTrendJob: Job) {
+class BatchScheduler(
+        private val jobLauncher: JobLauncher,
+        private val techTrendJob: Job,
+        private val meterRegistry: io.micrometer.core.instrument.MeterRegistry
+) {
 
     // Runs every Monday at 09:00 AM
     @Scheduled(cron = "0 0/1 * * * ?")
@@ -20,6 +24,17 @@ class BatchScheduler(private val jobLauncher: JobLauncher, private val techTrend
                         .addString("timestamp", LocalDateTime.now().toString())
                         .toJobParameters()
 
-        jobLauncher.run(techTrendJob, jobParameters)
+        try {
+            val jobExecution = jobLauncher.run(techTrendJob, jobParameters)
+            val status = jobExecution.status.name.lowercase()
+            meterRegistry
+                    .counter("batch.job.result", "job", "techTrendJob", "result", status)
+                    .increment()
+        } catch (e: Exception) {
+            meterRegistry
+                    .counter("batch.job.result", "job", "techTrendJob", "result", "failed")
+                    .increment()
+            throw e
+        }
     }
 }
