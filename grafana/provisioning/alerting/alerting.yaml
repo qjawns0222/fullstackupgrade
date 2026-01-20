@@ -1,0 +1,85 @@
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: slack-webhook
+    receivers:
+      - uid: slack-notifier
+        type: slack
+        settings:
+          url: "https://hooks.slack.com/services/YOUR_WORKSPACE/YOUR_CHANNEL/YOUR_TOKEN" # REPLACE THIS
+          title: "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}"
+          text: "{{ range .Alerts }}{{ .Annotations.description }}\n{{ end }}"
+
+policies:
+  - orgId: 1
+    receiver: slack-webhook
+    group_by: ['grafana_folder', 'alertname']
+
+groups:
+  - orgId: 1
+    name: 'SpringBootAlerts'
+    folder: 'Monitoring'
+    interval: 1m
+    rules:
+      - uid: 'api_error_high'
+        title: 'High API Error Rate (> 5%)'
+        condition: 'B'
+        data:
+          - refId: 'A'
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: 'prometheus'
+            model:
+              expr: sum(rate(http_server_requests_seconds_count{status=~"5.."}[1m])) / sum(rate(http_server_requests_seconds_count[1m]))
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: 'A'
+          - refId: 'B'
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: '-100' # Expression datasource
+            model:
+              conditions:
+                - { evaluator: { params: [0.05], type: gt }, operator: { type: and }, query: { params: ['A'], type: query }, reducer: { params: [], type: last }, type: query }
+              datasource:
+                type: __expr__
+                uid: '-100'
+              expression: 'A'
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: 'B'
+              type: threshold
+        annotations:
+          description: "API Error Rate is {{ $values.B.Value | printf \"%.2f\" }}% (Threshold: 5%)"
+        labels:
+          severity: critical
+
+      - uid: 'mail_failure_spike'
+        title: 'Mail Failure Spike'
+        condition: 'B'
+        data:
+          - refId: 'A'
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: 'prometheus'
+            model:
+              expr: rate(mail_sent_total{status="failure"}[1m])
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: 'A'
+          - refId: 'B'
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: '-100'
+            model:
+              conditions:
+                - { evaluator: { params: [0.1], type: gt }, operator: { type: and }, query: { params: ['A'], type: query }, reducer: { params: [], type: last }, type: query }
+              datasource:
+                type: __expr__
+                uid: '-100'
+              expression: 'A'
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: 'B'
+              type: threshold
+        annotations:
+          description: "Mail Failure Rate is high: {{ $values.B.Value }}"
+        labels:
+          severity: warning
