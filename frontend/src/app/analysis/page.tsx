@@ -31,7 +31,7 @@ export default function AnalysisPage() {
 
         const pollInterval = setInterval(async () => {
             try {
-                const res = await fetch(`http://localhost:8080/api/analysis/${uploadId}`);
+                const res = await fetch(`http://localhost:8000/api/analysis/${uploadId}`);
                 if (res.ok) {
                     const data = await res.json();
                     // Map backend status to frontend status
@@ -68,7 +68,7 @@ export default function AnalysisPage() {
             setStatus("PENDING");
             setProgress(10);
 
-            const res = await fetch("http://localhost:8080/api/analysis", {
+            const res = await fetch("http://localhost:8000/api/analysis", {
                 method: "POST",
                 body: formData,
             });

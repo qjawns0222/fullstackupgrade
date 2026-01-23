@@ -17,7 +17,7 @@ class BatchScheduler(
 ) {
 
     // Runs every Monday at 09:00 AM
-    @Scheduled(cron = "0 0/1 * * * ?")
+    @Scheduled(cron = "0 0 * * * ?")
     fun runTechTrendJob() {
         val jobParameters =
                 JobParametersBuilder()

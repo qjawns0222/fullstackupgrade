@@ -4,6 +4,8 @@ spring:
     always-use-message-format: true
   application:
     name: demo
+  
+
   data:
     redis:
       host: localhost
@@ -27,7 +29,7 @@ spring:
     host: smtp.gmail.com
     port: 587
     username: kbj961117@gmail.com  # 본인 Gmail 계정
-    password: *******   # 앱 비밀번호 (Google 계정 설정 -> 보안 -> 앱 비밀번호)
+    password: fzcj rtud ihdd fsjl   # 앱 비밀번호 (Google 계정 설정 -> 보안 -> 앱 비밀번호)
     properties:
       mail:
         smtp:
@@ -40,3 +42,12 @@ spring:
           writetimeout: 5000 # 쓰기 타임아웃
 jwt:
   secret: DisIsVerySecretKeyForJwtExampleProjectMustBeLongerThan256BitsVoila
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, prometheus, metrics
+  metrics:
+    tags:
+      application: ${spring.application.name}

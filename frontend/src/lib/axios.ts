@@ -2,7 +2,7 @@ import axios, { AxiosError, AxiosRequestConfig } from 'axios';
 import { dispatchToast } from './toast-event';
 
 const api = axios.create({
-    baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api',
+    baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api',
     timeout: 10000,
     headers: {
         'Content-Type': 'application/json',
@@ -74,7 +74,7 @@ api.interceptors.response.use(
 
                 // 토큰 재발급 요청 (axios 인스턴스가 아닌 기본 axios 사용)
                 // baseURL이 다를 수 있으므로 풀 URL 사용 추천하나, 여기서는 환경변수나 하드코딩 사용
-                const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api';
+                const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
                 const { data } = await axios.post(`${baseURL}/auth/reissue`, {}, {
                     headers: { Authorization: refreshToken }
                 });

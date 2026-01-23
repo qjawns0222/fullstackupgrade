@@ -5,8 +5,8 @@ export const useNotification = () => {
     useEffect(() => {
         const token = localStorage.getItem('accessToken');
         const url = token
-            ? `http://localhost:8080/api/notifications/subscribe?token=${token}`
-            : 'http://localhost:8080/api/notifications/subscribe';
+            ? `http://localhost:8000/api/notifications/subscribe?token=${token}`
+            : 'http://localhost:8000/api/notifications/subscribe';
 
         const eventSource = new EventSource(url);
 

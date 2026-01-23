@@ -1,0 +1,85 @@
+server:
+  port: 8000
+
+spring:
+  application:
+    name: gateway
+  cloud:
+    gateway:
+      # CORS Configuration
+      globalcors:
+        cors-configurations:
+          '[/**]':
+            allowedOrigins: "http://localhost:3000"
+            allowedMethods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - OPTIONS
+            allowedHeaders: "*"
+            allowCredentials: true
+      
+      # Default Filters
+      default-filters:
+        - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials, RETAIN_UNIQUE
+
+      # Default Timeouts
+      httpclient:
+        connect-timeout: 1000
+        response-timeout: 5s
+        
+      # Routes
+      routes:
+        - id: auth-route
+          uri: http://localhost:8080
+          predicates:
+            - Path=/api/auth/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: backendCircuitBreaker
+                fallbackUri: forward:/fallback
+
+        - id: backend-route
+          uri: http://localhost:8080
+          predicates:
+            - Path=/api/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: backendCircuitBreaker
+                fallbackUri: forward:/fallback
+            - AuthorizationHeader
+
+# Resilience4j 서킷 브레이커 설정
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        slidingWindowSize: 10 # 최근 10개의 요청을 기준으로 판단
+        failureRateThreshold: 50 # 실패율 50% 이상이면 서킷 오픈
+        waitDurationInOpenState: 10000 # 서킷 오픈 상태 유지 시간 (10초)
+        permittedNumberOfCallsInHalfOpenState: 3 # Half-Open 상태에서 허용할 요청 수
+        automaticTransitionFromOpenToHalfOpenEnabled: true # Open -> Half-Open 자동 전환
+        minimumNumberOfCalls: 5 # 최소 5개 요청이 있어야 실패율 계산 시작
+    instances:
+      backendCircuitBreaker:
+        baseConfig: default
+  timelimiter:
+    configs:
+      default:
+        timeoutDuration: 5s # 타임아웃 5초 (httpclient.response-timeout과 동일)
+
+# Actuator & Observability
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, circuitbreakers
+  endpoint:
+    health:
+      show-details: always
+
+jwt:
+  secret: DisIsVerySecretKeyForJwtExampleProjectMustBeLongerThan256BitsVoila
