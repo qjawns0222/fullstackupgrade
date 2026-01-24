@@ -29,6 +29,9 @@ dependencies {
     implementation 'com.fasterxml.jackson.module:jackson-module-kotlin'
     implementation 'org.jetbrains.kotlin:kotlin-reflect'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation "io.mockk:mockk:1.13.8"
+    testImplementation 'io.projectreactor:reactor-test'
+    testImplementation 'org.junit.platform:junit-platform-launcher'
 
     // JWT
     implementation 'io.jsonwebtoken:jjwt-api:0.11.5'
@@ -57,3 +60,4 @@ compileTestKotlin {
         jvmTarget = "17"
     }
 }
+
