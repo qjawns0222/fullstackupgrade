@@ -97,6 +97,10 @@ class JwtTokenProvider(
             e.claims
         }
     }
+
+    fun getSubject(token: String): String {
+        return parseClaims(token).subject
+    }
 }
 
 data class TokenInfo(

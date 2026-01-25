@@ -14,7 +14,8 @@ import org.springframework.transaction.annotation.Transactional
 class AuthService(
         private val authenticationManager: AuthenticationManager,
         private val jwtTokenProvider: JwtTokenProvider,
-        private val refreshTokenRepository: RefreshTokenRepository
+        private val refreshTokenRepository: RefreshTokenRepository,
+        private val customUserDetailsService: CustomUserDetailsService
 ) {
 
     @Transactional
@@ -39,25 +40,42 @@ class AuthService(
 
     @Transactional
     fun reissue(refreshToken: String): TokenDto {
+        // 1. Validate Token Signature
         if (!jwtTokenProvider.validateToken(refreshToken)) {
             throw RuntimeException("Refresh Token이 유효하지 않습니다.")
         }
 
-        val authentication = jwtTokenProvider.getAuthentication(refreshToken)
+        // 2. Get Subject (Username) from Token (Logic fixed: No 'auth' claim check needed here)
+        val username = jwtTokenProvider.getSubject(refreshToken)
+
+        // 3. Check consistency with Redis
         val savedRefreshToken =
                 refreshTokenRepository.findById(refreshToken).orElseThrow {
-                    RuntimeException("로그아웃 된 사용자입니다.")
+                    // Possible scenarios:
+                    // A. Token expired and removed from Redis
+                    // B. Token was already used (rotated) -> Reuse Attempt!
+                    // Here we can treat it as "Logged out or Invalid" for now.
+                    // To implement strict Reuse Detection, we'd need another store or Family ID.
+                    RuntimeException("로그아웃 된 사용자이거나, 이미 만료/사용된 토큰입니다.")
                 }
 
-        if (savedRefreshToken.username != authentication.name) {
+        if (savedRefreshToken.username != username) {
             throw RuntimeException("토큰의 유저 정보가 일치하지 않습니다.")
         }
 
+        // 4. Load fresh UserDetails to enforce current roles/state
+        val userDetails = customUserDetailsService.loadUserByUsername(username)
+        val authentication = UsernamePasswordAuthenticationToken(userDetails, "", userDetails.authorities)
+
+        // 5. Generate New Tokens (Rotate)
         val tokenInfo = jwtTokenProvider.createToken(authentication)
 
+        // 6. Delete old token (Invalidate)
         refreshTokenRepository.delete(savedRefreshToken)
+
+        // 7. Save new token
         refreshTokenRepository.save(
-                RefreshToken(refreshToken = tokenInfo.refreshToken, username = authentication.name)
+                RefreshToken(refreshToken = tokenInfo.refreshToken, username = username)
         )
 
         return TokenDto(
