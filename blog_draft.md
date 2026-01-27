@@ -1,31 +1,40 @@
-# [Fullstack] 입사지원 관리 시스템(ATS) 백엔드 구현
+# [Fullstack] Redis 기반 API 멱등성(Idempotency) 보장 컴포넌트 개발
 
 ## 1. 개발 배경 (Why)
-취업 준비를 하다 보면 수많은 기업에 지원하게 된다. 엑셀이나 노션으로 관리할 수도 있지만, 개발자로서 내 커리어를 관리하는 '커리어 프로젝트' 내에서 직접 입사지원 현황을 관리하고 싶었다. 그래서 오늘은 '입사지원 관리 시스템(ATS)'의 백엔드 기능을 구현하기로 결심했다.
+분산 시스템 환경이나 네트워크 지연이 있는 모바일 환경에서, 사용자가 버튼을 중복 클릭하거나 네트워크 재시도로 인해 동일한 요청이 서버로 여러 번 전송되는 일은 흔하다. 특히 결제나 포인트 차감 같은 민감한 로직은 **단 한 번만 실행되어야 하는(Exactly-Once) 멱등성(Idempotency)** 보장이 필수적이다. 비즈니스 로직마다 중복 방지 코드를 넣는 것은 비효율적이기에, 오늘은 **AOP(Aspect Oriented Programming)** 와 **Redis** 를 활용해 범용적으로 사용할 수 있는 멱등성 처리기를 구현했다.
 
-## 2. 설계 및 구현 (Design & Implementation)
-백엔드는 Kotlin과 Spring Boot를 기반으로 하며, 견고한 계층형 아키텍처를 따랐다.
+## 2. 설계 및 기술 스택 (Architecture)
+### 핵심 기술
+- **Kotlin & Spring AOP**: 비즈니스 로직 침투를 최소화하기 위해 어노테이션 기반 Aspect로 구현.
+- **Redis (StringRedisTemplate)**: 여러 서버 인스턴스 간에도 상태를 공유하고, TTL 기능을 활용해 키를 자동 만료시키기 위함.
+- **Custom Annotation**: `@Idempotent` 어노테이션만 붙이면 동작하도록 설계.
 
-### 2.1 도메인 설계 (Entity)
-가장 먼저 `JobApplication` 엔티티를 정의했다. 회사명(`companyName`), 포지션(`position`), 지원 상태(`status`), 지원 날짜(`appliedDate`), 메모(`memo`) 등을 포함하도록 설계했다. 특히 `status`는 `Enum`으로 정의하여 `APPLIED`, `INTERVIEW`, `PASSED` 등으로 상태를 명확히 관리하도록 했다.
+### 동작 원리
+1. 클라이언트는 요청 헤더에 `Idempotency-Key` (UUID 등)를 포함하여 요청한다.
+2. `IdempotencyAspect` 가 요청을 가로채 Redis에 해당 키가 존재하는지 확인한다.
+3. **키가 없으면**: Redis에 키를 저장(SET)하고 비즈니스 로직을 수행한다.
+4. **키가 있으면**: 중복 요청으로 간주하고 `IdempotencyException` 예외를 던져 409 Conflict 등의 응답을 반환한다.
+5. 로직 수행 중 예외가 발생하면 Redis 키를 삭제하여 재시도를 허용한다.
 
-### 2.2 비즈니스 로직 (Service)
-`JobApplicationService`에서는 CRUD 로직을 충실히 구현했다. 보안을 위해 모든 데이터 접근 시 현재 로그인한 사용자의 ID(`userId`)와 데이터 소유자의 ID가 일치하는지 검증하는 로직을 추가했다. 남의 지원 내역을 보거나 수정하면 안 되기 때문이다.
+## 3. 주요 구현 내용 (Implementation)
 
-### 2.3 API 엔드포인트 (Controller)
-`JobApplicationController`에서는 RESTful API를 제공한다. `Principal` 객체를 통해 인증된 사용자의 정보를 가져오고, 이를 서비스 계층으로 전달한다.
-
+### 3.1 Custom Annotation 정의
 ```kotlin
-@PostMapping
-fun createApplication(@RequestBody request: JobApplicationRequest, principal: Principal): ResponseEntity<JobApplicationResponse> {
-    val userId = getUserId(principal)
-    val response = jobApplicationService.createApplication(userId, request)
-    return ResponseEntity.status(HttpStatus.CREATED).body(response)
-}
+@Target(AnnotationTarget.FUNCTION)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class Idempotent(
+    val expireTime: Long = 60,
+    val timeUnit: TimeUnit = TimeUnit.SECONDS,
+    val keyHeader: String = "Idempotency-Key"
+)
 ```
+개발자가 만료 시간과 헤더 키를 자유롭게 설정할 수 있도록 유연하게 설계했다.
 
-## 3. 테스트 및 검증 (Testing)
-기능 구현만큼 중요한 것이 테스트다. `JobApplicationServiceTest`를 작성하여 Mockito를 이용한 단위 테스트를 수행했다. 외부 의존성(Repository)을 Mocking하여 순수 비즈니스 로직이 의도대로 동작하는지 검증했고, `./gradlew test`를 통해 모든 테스트가 통과함을 확인했다.
+### 3.2 AOP Aspect 구현
+`RedisTemplate.opsForValue().setIfAbsent(...)` 같은 원자적 연산을 활용할 수도 있지만, 이번 구현에서는 명시적인 키 체크와 예외 처리를 위해 `hasKey` 체크 후 `set` 하는 방식을 택했다. 실제 운영 환경에서는 동시성 이슈를 완벽히 제어하기 위해 `SETNX` 패턴을 사용하는 것이 더 안전할 것이다.
+
+### 3.3 테스트 (Testing)
+Mockito를 활용하여 `StringRedisTemplate`을 Mocking하고, 키 유무에 따른 Aspect의 분기 처리를 단위 테스트로 철저히 검증했다. 또한 Next.js 프론트엔드에 테스트 페이지를 만들어 실제로 여러 요청을 동시에 날렸을 때 중복 요청이 차단되는지 확인했다.
 
 ## 4. 마치며 (Retrospective)
-단순한 CRUD 같지만, 사용자별 데이터 격리(Isolation)와 테스트 코드 작성이라는 기본 원칙을 지키며 개발했다. 다음에는 이 API를 연동하여 프론트엔드에서 시각적으로 지원 현황을 볼 수 있는 대시보드를 만들어야겠다. 오늘도 미션 클리어!
+이런 '횡단 관심사(Cross-cutting Concern)'를 인프라 계층으로 분리해두면, 동료 개발자들은 비즈니스 로직에만 집중할 수 있다. 이것이 바로 시니어 개발자가 팀에 기여하는 방식이라 생각한다. Redis라는 강력한 도구가 있기에 상태 관리 복잡도를 크게 줄일 수 있었다. 다음에는 더 정교한 분산 락(Distributed Lock) 구현에도 도전해봐야겠다.

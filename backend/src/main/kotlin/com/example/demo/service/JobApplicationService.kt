@@ -1,5 +1,6 @@
 package com.example.demo.service
 
+import com.example.demo.annotation.AuditLog
 import com.example.demo.dto.JobApplicationRequest
 import com.example.demo.dto.JobApplicationResponse
 import com.example.demo.entity.JobApplication
@@ -33,6 +34,7 @@ class JobApplicationService(
     }
 
     @Transactional
+    @AuditLog(action = "CREATE_APPLICATION", description = "User created a new job application")
     fun createApplication(userId: Long, request: JobApplicationRequest): JobApplicationResponse {
         val user =
                 userRepository.findById(userId).orElseThrow {
@@ -53,6 +55,7 @@ class JobApplicationService(
     }
 
     @Transactional
+    @AuditLog(action = "UPDATE_APPLICATION", description = "User updated a job application")
     fun updateApplication(
             id: Long,
             userId: Long,
@@ -78,6 +81,7 @@ class JobApplicationService(
     }
 
     @Transactional
+    @AuditLog(action = "DELETE_APPLICATION", description = "User deleted a job application")
     fun deleteApplication(id: Long, userId: Long) {
         val application =
                 jobApplicationRepository.findById(id).orElseThrow {
