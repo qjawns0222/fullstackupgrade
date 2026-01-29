@@ -1,6 +1,7 @@
 package com.example.demo.scheduler
 
 import java.time.LocalDateTime
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock
 import org.springframework.batch.core.Job
 import org.springframework.batch.core.JobParametersBuilder
 import org.springframework.batch.core.launch.JobLauncher
@@ -17,7 +18,8 @@ class BatchScheduler(
 ) {
 
     // Runs every Monday at 09:00 AM
-    @Scheduled(cron = "0 0 * * * ?")
+    @Scheduled(cron = "0 0 9 * * MON")
+    @SchedulerLock(name = "techTrendJob", lockAtLeastFor = "PT30S", lockAtMostFor = "PT10M")
     fun runTechTrendJob() {
         val jobParameters =
                 JobParametersBuilder()
