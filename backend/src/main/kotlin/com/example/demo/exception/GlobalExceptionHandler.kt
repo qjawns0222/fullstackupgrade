@@ -11,9 +11,7 @@ class GlobalExceptionHandler {
 
     private val log = LoggerFactory.getLogger(GlobalExceptionHandler::class.java)
 
-    /**
-     * Business Logic Exception
-     */
+    /** Business Logic Exception */
     @ExceptionHandler(BusinessException::class)
     protected fun handleBusinessException(e: BusinessException): ResponseEntity<ErrorResponse> {
         log.error("handleBusinessException", e)
@@ -22,13 +20,23 @@ class GlobalExceptionHandler {
         return ResponseEntity(response, errorCode.status)
     }
 
-    /**
-     * Generic Exception
-     */
+    /** Idempotency Exception */
+    @ExceptionHandler(IdempotencyException::class)
+    protected fun handleIdempotencyException(
+            e: IdempotencyException
+    ): ResponseEntity<ErrorResponse> {
+        log.error("handleIdempotencyException", e)
+        val errorCode = ErrorCode.DUPLICATE_REQUEST
+        val response = ErrorResponse.of(errorCode, e.message ?: errorCode.message)
+        return ResponseEntity(response, errorCode.status)
+    }
+
+    /** Generic Exception */
     @ExceptionHandler(Exception::class)
     protected fun handleException(e: Exception): ResponseEntity<ErrorResponse> {
         log.error("handleException", e)
-        val response = ErrorResponse.of(ErrorCode.INTERNAL_SERVER_ERROR, e.message ?: "Unknown Error")
+        val response =
+                ErrorResponse.of(ErrorCode.INTERNAL_SERVER_ERROR, e.message ?: "Unknown Error")
         return ResponseEntity(response, ErrorCode.INTERNAL_SERVER_ERROR.status)
     }
 }
