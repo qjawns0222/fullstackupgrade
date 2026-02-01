@@ -58,6 +58,8 @@ dependencies {
     // Caching & Redis
     implementation 'org.springframework.boot:spring-boot-starter-cache'
     implementation 'com.github.ben-manes.caffeine:caffeine'
+    implementation 'com.bucket4j:bucket4j-core:8.10.1'
+    testImplementation 'com.h2database:h2'
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
     implementation 'org.springframework.boot:spring-boot-starter-data-elasticsearch'
     implementation 'org.springframework.boot:spring-boot-starter-aop'
