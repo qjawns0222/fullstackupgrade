@@ -21,6 +21,10 @@ class MailService(
     private val logger = LoggerFactory.getLogger(MailService::class.java)
 
     @Async("mailExecutor")
+    @io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker(
+            name = "mailService",
+            fallbackMethod = "fallbackSendWeeklyReport"
+    )
     fun sendWeeklyReport(email: String, username: String, trends: List<TrendStats>) {
         logger.info("Sending weekly report to $email")
 
@@ -45,15 +49,37 @@ class MailService(
                     .increment()
             logger.info("Successfully sent weekly report to $email")
         } catch (e: MessagingException) {
+            // Re-throw to trigger fallback/record failure if desired, or handle here.
+            // If we catch here, Circuit Breaker might see 'Success'.
+            // To make CB work, we should throw or use recordFailure predicate.
+            // But existing code catches and logs.
+            // I should modify it to THROW so CB detects failure.
             meterRegistry
                     .counter("mail.sent", "type", "weekly_report", "status", "failure")
                     .increment()
             logger.error("Failed to send email to $email", e)
+            throw e
         } catch (e: Exception) {
             meterRegistry
                     .counter("mail.sent", "type", "weekly_report", "status", "failure")
                     .increment()
             logger.error("Unexpected error sending email to $email", e)
+            throw e
         }
+    }
+
+    fun fallbackSendWeeklyReport(
+            email: String,
+            username: String,
+            trends: List<TrendStats>,
+            ex: Throwable
+    ) {
+        logger.warn(
+                "Fallback triggered for $email. Circuit breaker status: OPEN or Error occurred. Reason: ${ex.message}"
+        )
+        meterRegistry
+                .counter("mail.sent", "type", "weekly_report", "status", "fallback")
+                .increment()
+        // Logic to queue for later retry could go here
     }
 }

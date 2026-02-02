@@ -411,15 +411,14 @@ gateway/bin/main/com/example/gateway/filter/LoggingFilter.kt
 .agent/skills/xlsx/recalc.py
 .agent/skills/xlsx/SKILL.md
 Agent.md
-blog_draft.md
+
 frontend/scripts/tistory-poster.ts
 frontend/scripts/layer.html
 frontend/after-publish-timeout.png
 frontend/error-screenshot.png
 frontend/publish-layer.png
-blog_draft.md
-blog_draft.md
 
 gateway/build/
 gateway/bin/
 blog_draft.md
+

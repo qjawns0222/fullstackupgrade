@@ -110,7 +110,10 @@ api.interceptors.response.use(
         }
 
         let message = '알 수 없는 오류가 발생했습니다.';
-        if (error.response) {
+        if (error.response?.status === 429) {
+            const retryAfter = error.response.headers['x-rate-limit-retry-after-seconds'];
+            message = `요청이 너무 많습니다. ${retryAfter ? retryAfter + '초 뒤에 ' : ''}잠시 후 다시 시도해주세요.`;
+        } else if (error.response) {
             const data = error.response.data as any;
             message = data?.message || data?.error || `오류: ${error.response.statusText}`;
         } else if (error.request) {
