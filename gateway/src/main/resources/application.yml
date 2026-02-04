@@ -52,6 +52,11 @@ spring:
                 fallbackUri: forward:/fallback
             - AuthorizationHeader
 
+        - id: websocket-route
+          uri: ws://localhost:8080
+          predicates:
+            - Path=/ws/**
+
 # Resilience4j 서킷 브레이커 설정
 resilience4j:
   circuitbreaker:

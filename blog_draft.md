@@ -1,89 +1,27 @@
 
-# [Fullstack] API Rate Limiting + Why Bucket4j?
+[Fullstack] Resilience4j Circuit Breaker 도입 - 메일 발송 장애 격리 및 시스템 안정성 강화
 
-오늘은 백엔드 API를 보호하기 위한 Rate Limiting(속도 제한) 기능을 구현했다.
-서비스가 커지면 필연적으로 마주하게 되는 것이 트래픽 관리다. 악의적인 디도스(DDoS) 공격은 물론이고, 클라이언트 개발자의 실수로 인한 무한 루프 요청 등으로부터 서버 리소스를 보호해야 한다.
+오늘은 프로젝트의 백엔드 안정성을 점검하던 중, MailService가 외부 SMTP 서버(Gmail)에 강한 의존성을 가지고 있다는 점을 발견했다. 외부 API나 서비스는 언제든 장애가 발생할 수 있고, 만약 응답이 지연된다면 우리 서버의 스레드까지 점유되어 전체 시스템의 장애로 번질 위험(Cascading Failure)이 있다.
 
-물론 앞단에 Nginx나 Spring Cloud Gateway 같은 게이트웨이가 있다면 거기서 처리하는 게 가장 효율적일 수 있다. 하지만 'Defense in Depth(심층 방어)' 원칙에 따라, 애플리케이션 레벨에서도 자체적인 방어막을 구축하는 것이 안전하다. 게이트웨이가 뚫리거나 우회되었을 때 최후의 보루가 되기 때문이다.
+이를 방지하기 위해 'Circuit Breaker(회로 차단기)' 패턴을 적용하기로 결정했다. 라이브러리로는 가주 사용되는 Hystrix 대신, 더 가볍고 함수형 프로그래밍을 지원하는 Resilience4j를 선택했다.
 
-## 기술 선택: Bucket4j vs Redis/Lua
+[작업 내용]
 
-Rate Limiting을 구현하는 방법은 다양하다. Redis의 `INCR` 명령어와 만료 시간을 이용할 수도 있고, Lua 스크립트를 짤 수도 있다. 하지만 나는 **Bucket4j** 라이브러리를 선택했다.
+1. 의존성 추가 및 설정
+Spring Boot 3 환경에 맞춰 resilience4j-spring-boot3 라이브러리를 추가했다.
+단순히 라이브러리만 추가하는 것이 아니라, ResilienceConfig 클래스를 만들어 'mailService'라는 이름의 인스턴스에 대한 구체적인 정책을 정의했다.
+- Sliding Window Size: 5 (최근 5번의 요청을 기준으로 판단)
+- Failure Rate Threshold: 40% (5번 중 2번 이상 실패 시 회로 차단)
+- Wait Duration: 20초 (차단 후 20초 대기 후 다시 시도)
 
-이유는 단순하다. **알고리즘의 신뢰성**과 **구현의 편의성** 때문이다.
-Bucket4j는 '토큰 버킷(Token Bucket)' 알고리즘을 아주 정교하게 구현해놨다. 단순히 카운트만 세는 게 아니라, 시간에 따라 토큰이 보충(Refill)되는 속도를 수학적으로 정확하게 제어한다. 또한, 트래픽이 적을 때는 로컬 캐시(Caffeine)만으로도 처리할 수 있어 Redis 네트워크 비용을 아낄 수 있다.
+2. 서비스 계층 적용
+MailService의 sendWeeklyReport 메소드에 @CircuitBreaker 어노테이션을 적용했다.
+중요한 점은 장애 발생 시의 처리다. fallbackMethod를 지정하여, 회로가 열려있거나 예외가 발생했을 때 단순히 에러를 뱉는 대신 'fallbackSendWeeklyReport' 메소드가 실행되도록 했다. 현재는 로그를 남기는 정도로 처리했지만, 추후에는 재시도 큐에 넣거나 관리자에게 알림을 보내는 식으로 확장할 수 있다.
 
-## 구현 내용
+3. 모니터링 및 프론트엔드 연동
+백엔드 로직만으로는 현재 상태를 알기 어렵다. Spring Actuator 설정을 통해 circuitbreakers 엔드포인트를 노출시켰고, Next.js 프론트엔드에 관리자용 대시보드 페이지(/admin/status)를 추가했다.
+이 대시보드에서는 현재 메일 서비스의 회로 상태(CLOSED, OPEN, HALF_OPEN)를 실시간으로 확인할 수 있고, 테스트 버튼을 통해 강제로 메일 발송을 시도해볼 수 있다.
 
-### 1. 의존성 추가
-가볍게 `bucket4j-core`를 추가했다. Spring Boot Starter 버전도 있지만, 직접 제어하는 맛을 위해 코어 라이브러리를 사용했다. 또한 로컬 캐싱을 위해 `Caffeine`도 함께 사용했다.
-
-```groovy
-implementation 'com.github.ben-manes.caffeine:caffeine'
-implementation 'com.bucket4j:bucket4j-core:8.10.1'
-```
-
-### 2. RateLimiterService
-버킷을 관리하는 서비스다. IP 주소를 키(Key)로 사용하여 버킷을 생성하고 캐싱한다.
-정책은 '1분에 20회 요청'으로 잡았다. 테스트용이라 좀 박하게 잡았지만, 실제 운영 환경에서는 API 중요도에 따라 다르게 설정하면 된다.
-
-```kotlin
-@Service
-class RateLimiterService {
-    private val cache: ConcurrentHashMap<String, Bucket> = ConcurrentHashMap()
-
-    fun resolveBucket(key: String): Bucket {
-        return cache.computeIfAbsent(key) { _ -> newBucket() }
-    }
-
-    private fun newBucket(): Bucket {
-        // 1분에 20개 토큰 충전 (Greedy 방식)
-        val limit = Bandwidth.classic(20, Refill.greedy(20, Duration.ofMinutes(1)))
-        return Bucket.builder().addLimit(limit).build()
-    }
-}
-```
-
-### 3. RateLimitFilter
-`HandlerInterceptor` 대신 `Filter`를 선택했다. Spring Security보다 앞단에서 막기 위해서다. 인증되지 않은 사용자가 401 에러를 유발하는 요청을 무한정 보내면 DB나 인증 서버에 부하를 줄 수 있다. 그래서 제일 앞단인 Servlet Filter에서 IP 기반으로 쳐내는 것이 맞다고 판단했다.
-
-```kotlin
-@Component
-@Order(Ordered.HIGHEST_PRECEDENCE)
-class RateLimitFilter(
-    private val rateLimiterService: RateLimiterService
-) : Filter {
-    override fun doFilter(request: ServletRequest, response: ServletResponse, chain: FilterChain) {
-        // ... (IP 추출 로직)
-        val bucket = rateLimiterService.resolveBucket(ip)
-        
-        // 토큰 소비 시도 (남은 토큰 수 반환)
-        val probe = bucket.tryConsumeAndReturnRemaining(1)
-
-        if (probe.isConsumed) {
-            httpResponse.addHeader("X-Rate-Limit-Remaining", probe.remainingTokens.toString())
-            chain.doFilter(request, response)
-        } else {
-            httpResponse.status = 429
-            httpResponse.addHeader("X-Rate-Limit-Retry-After-Seconds", probe.nanosToWaitForRefill.toString())
-            httpResponse.writer.write("Too many requests.")
-            return // 요청 차단
-        }
-    }
-}
-```
-
-### 4. 프론트엔드 처리
-서버가 429 상태 코드를 던지면, 클라이언트는 당황하지 않고 사용자에게 친절하게 알려줘야 한다. Axios Interceptor에 429 처리를 추가했다.
-
-```typescript
-if (error.response?.status === 429) {
-    const retryAfter = error.response.headers['x-rate-limit-retry-after-seconds'];
-    message = `요청이 너무 많습니다. ${retryAfter ? retryAfter + '초 뒤에 ' : ''}잠시 후 다시 시도해주세요.`;
-}
-```
-
-## 마무리
-테스트는 `MockMvc`와 `Mockito`를 이용해 단위 테스트로 검증했다. 통합 테스트를 하려면 Redis나 DB가 떠있어야 하는데, CI/CD 환경이나 로컬 환경의 제약을 받지 않도록 외부 의존성을 격리하는 것이 중요하다.
-
-작은 기능이지만, 서비스의 안정성을 위해 꼭 필요한 안전벨트를 채운 기분이다. 이제 안심하고 더 복잡한 기능을 개발하러 갈 수 있겠다.
+[회고]
+테스트 코드를 작성하는 과정에서 @SpringBootTest와 Elasticsearch 설정 간의 충돌로 인해 컨텍스트 로드 문제가 발생했다. 통합 테스트 환경을 구축할 때는 외부 의존성을 적절히 Mocking하는 것이 얼마나 중요한지 다시 한 번 느꼈다. 결국 비즈니스 로직을 검증하는 단위 테스트로 전환하여 배포 안정성을 확보했다.
+이번 작업을 통해 외부 시스템 장애가 우리 서비스로 전파되는 것을 막는 '격벽'을 세웠다는 점에서 큰 성취감을 느낀다.

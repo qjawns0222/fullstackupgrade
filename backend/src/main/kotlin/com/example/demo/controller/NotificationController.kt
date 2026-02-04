@@ -1,28 +1,17 @@
 package com.example.demo.controller
 
-import com.example.demo.repository.SseEmitters
-import org.slf4j.LoggerFactory
-import org.springframework.http.MediaType
-import org.springframework.web.bind.annotation.GetMapping
-import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.messaging.simp.SimpMessagingTemplate
+import org.springframework.web.bind.annotation.PostMapping
+import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RestController
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter
-import java.security.Principal
+
+data class NotificationMessage(val message: String)
 
 @RestController
-@RequestMapping("/api/notifications")
-class NotificationController(
-    private val sseEmitters: SseEmitters
-) {
+class NotificationController(private val template: SimpMessagingTemplate) {
 
-    private val log = LoggerFactory.getLogger(NotificationController::class.java)
-
-    @GetMapping(value = ["/subscribe"], produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
-    fun subscribe(principal: Principal?): SseEmitter {
-        val username = principal?.name ?: "anonymous"
-
-        // Timeout: 60 seconds (can be adjusted)
-        val emitter = SseEmitter(60 * 1000L)
-        return sseEmitters.add(username, emitter)
+    @PostMapping("/api/notify")
+    fun sendNotification(@RequestBody message: NotificationMessage) {
+        template.convertAndSend("/topic/notifications", message)
     }
 }

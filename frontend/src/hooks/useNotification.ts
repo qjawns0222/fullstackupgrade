@@ -1,38 +1,40 @@
 import { useEffect } from 'react';
 import { dispatchToast } from '@/lib/toast-event';
+import SockJS from 'sockjs-client';
+import { Client } from '@stomp/stompjs';
 
 export const useNotification = () => {
     useEffect(() => {
-        const token = localStorage.getItem('accessToken');
-        const url = token
-            ? `http://localhost:8000/api/notifications/subscribe?token=${token}`
-            : 'http://localhost:8000/api/notifications/subscribe';
+        // Use Gateway URL (port 8000)
+        const socket = new SockJS('http://localhost:8000/ws');
 
-        const eventSource = new EventSource(url);
-
-        eventSource.onopen = () => {
-            console.log('SSE Connected');
-        };
-
-        eventSource.onmessage = (event) => {
-            // Default message handler
-            console.log('SSE Message:', event.data);
-        };
-
-        eventSource.addEventListener('analysis-complete', (event) => {
-            console.log('Analysis Complete Event:', event.data);
-            dispatchToast(event.data, 'success');
+        const client = new Client({
+            webSocketFactory: () => socket,
+            reconnectDelay: 5000,
+            onConnect: () => {
+                console.log('Connected to WebSocket');
+                client.subscribe('/topic/notifications', (message) => {
+                    try {
+                        const body = JSON.parse(message.body);
+                        console.log('Received:', body);
+                        // Access message content. NotificationMessage has 'message' field
+                        dispatchToast(body.message, 'success');
+                    } catch (e) {
+                        console.error("Failed to parse message", e);
+                        dispatchToast("Received notification", 'success');
+                    }
+                });
+            },
+            onStompError: (frame) => {
+                console.error('Broker reported error: ' + frame.headers['message']);
+                console.error('Additional details: ' + frame.body);
+            },
         });
 
-        eventSource.onerror = (error) => {
-            console.error('SSE Error:', error);
-            eventSource.close();
-            // Optional: Implement reconnection logic here
-        };
+        client.activate();
 
         return () => {
-            console.log('SSE Disconnected');
-            eventSource.close();
+            client.deactivate();
         };
     }, []);
 };
