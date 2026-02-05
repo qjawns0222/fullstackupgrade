@@ -17,11 +17,14 @@ spring:
     password: root     # DB 비밀번호
   jpa:
     hibernate:
-      ddl-auto: update # DB 스키마 자동 생성 (운영에선 validate 또는 none 사용)
+      ddl-auto: validate # Flyway handles schema
     properties:
       hibernate:
         format_sql: true # SQL 예쁘게 출력
         show_sql: true   # SQL 로그에 
+  flyway:
+    enabled: true
+    baseline-on-migrate: true 
   batch:
     jdbc:
       initialize-schema: always # 스프링 배치 메타 테이블 자동 생성
@@ -47,7 +50,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health, prometheus, metrics, circuitbreakers
+        include: health, prometheus, metrics, circuitbreakers, flyway
   health:
     circuitbreakers:
       enabled: true

@@ -1,27 +1,39 @@
+# [Fullstack] 실시간 알림 (WebSocket) + 배치 작업 연동 - 더 이상의 폴링은 없다
 
-[Fullstack] Resilience4j Circuit Breaker 도입 - 메일 발송 장애 격리 및 시스템 안정성 강화
+## 1. 멍하니 모니터만 바라보는 것은 죄악이다
+배치 작업은 시스템의 필수 요소지만, 그 완료 시점을 알기 위해 DB를 조회하거나 로그를 새로고침하는 행위는 개발자의 리소스를 낭비하는 가장 멍청한 짓이다. 기존 레거시 코드에는 이런 '기다림'을 해결할 장치가 전무했다. 이메일 알림은 느리고, 스팸함에 처박히기 일쑤다. 즉시성이 보장되지 않는 알림은 알림이 아니다.
 
-오늘은 프로젝트의 백엔드 안정성을 점검하던 중, MailService가 외부 SMTP 서버(Gmail)에 강한 의존성을 가지고 있다는 점을 발견했다. 외부 API나 서비스는 언제든 장애가 발생할 수 있고, 만약 응답이 지연된다면 우리 서버의 스레드까지 점유되어 전체 시스템의 장애로 번질 위험(Cascading Failure)이 있다.
+## 2. 왜 WebSocket인가? (Zero-Base Analysis)
+물론 SSE(Server-Sent Events)도 고려해볼 만했다. 하지만 양방향 통신 가능성을 열어두고, STOMP 프로토콜을 통해 메시지 브로커 패턴을 정석적으로 구현하는 것이 확장성 면에서 유리하다. HTTP 폴링? 그건 서버 자원을 하수구에 버리는 짓이다. 우리는 '연결'이 필요하다.
 
-이를 방지하기 위해 'Circuit Breaker(회로 차단기)' 패턴을 적용하기로 결정했다. 라이브러리로는 가주 사용되는 Hystrix 대신, 더 가볍고 함수형 프로그래밍을 지원하는 Resilience4j를 선택했다.
+## 3. 구현: Spring Batch와 WebSocket의 만남
+백엔드에서는 `spring-boot-starter-websocket`을 도입했다. 핵심은 `SimpMessagingTemplate`을 배치 리스너(`JobCompletionNotificationListener`)에 주입하는 것이다. 배치가 성공적으로 끝나면(`BatchStatus.COMPLETED`), 즉시 `/topic/notifications` 토픽으로 메시지를 쏜다.
 
-[작업 내용]
+```kotlin
+// JobCompletionNotificationListener.kt
+override fun afterJob(jobExecution: JobExecution) {
+    if (jobExecution.status == BatchStatus.COMPLETED) {
+        template.convertAndSend("/topic/notifications", NotificationMessage("Batch Job Completed!"))
+    }
+}
+```
 
-1. 의존성 추가 및 설정
-Spring Boot 3 환경에 맞춰 resilience4j-spring-boot3 라이브러리를 추가했다.
-단순히 라이브러리만 추가하는 것이 아니라, ResilienceConfig 클래스를 만들어 'mailService'라는 이름의 인스턴스에 대한 구체적인 정책을 정의했다.
-- Sliding Window Size: 5 (최근 5번의 요청을 기준으로 판단)
-- Failure Rate Threshold: 40% (5번 중 2번 이상 실패 시 회로 차단)
-- Wait Duration: 20초 (차단 후 20초 대기 후 다시 시도)
+프론트엔드(Next.js)에서는 `sockjs-client`와 `@stomp/stompjs`를 사용해 우아하게 신호를 받는다. 기존에 어설프게 작성되어 있던 `EventSource` 기반의 코드는 가차 없이 폐기했다. 
 
-2. 서비스 계층 적용
-MailService의 sendWeeklyReport 메소드에 @CircuitBreaker 어노테이션을 적용했다.
-중요한 점은 장애 발생 시의 처리다. fallbackMethod를 지정하여, 회로가 열려있거나 예외가 발생했을 때 단순히 에러를 뱉는 대신 'fallbackSendWeeklyReport' 메소드가 실행되도록 했다. 현재는 로그를 남기는 정도로 처리했지만, 추후에는 재시도 큐에 넣거나 관리자에게 알림을 보내는 식으로 확장할 수 있다.
+```typescript
+// useNotification.ts
+const socket = new SockJS('http://localhost:8000/ws');
+const client = new Client({
+    webSocketFactory: () => socket,
+    onConnect: () => {
+        client.subscribe('/topic/notifications', (msg) => {
+            dispatchToast(JSON.parse(msg.body).message, 'success');
+        });
+    }
+});
+```
 
-3. 모니터링 및 프론트엔드 연동
-백엔드 로직만으로는 현재 상태를 알기 어렵다. Spring Actuator 설정을 통해 circuitbreakers 엔드포인트를 노출시켰고, Next.js 프론트엔드에 관리자용 대시보드 페이지(/admin/status)를 추가했다.
-이 대시보드에서는 현재 메일 서비스의 회로 상태(CLOSED, OPEN, HALF_OPEN)를 실시간으로 확인할 수 있고, 테스트 버튼을 통해 강제로 메일 발송을 시도해볼 수 있다.
+게이트웨이(Spring Cloud Gateway) 설정도 잊지 말아야 한다. `/ws/**` 경로에 대한 라우팅을 추가해주지 않으면 프론트엔드는 404 에러만 뱉을 것이다.
 
-[회고]
-테스트 코드를 작성하는 과정에서 @SpringBootTest와 Elasticsearch 설정 간의 충돌로 인해 컨텍스트 로드 문제가 발생했다. 통합 테스트 환경을 구축할 때는 외부 의존성을 적절히 Mocking하는 것이 얼마나 중요한지 다시 한 번 느꼈다. 결국 비즈니스 로직을 검증하는 단위 테스트로 전환하여 배포 안정성을 확보했다.
-이번 작업을 통해 외부 시스템 장애가 우리 서비스로 전파되는 것을 막는 '격벽'을 세웠다는 점에서 큰 성취감을 느낀다.
+## 4. 마치며
+기술은 사용자를 편하게 해야 한다. 그리고 시스템 관리자도, 개발자도 결국은 사용자다. 내 시간을 아껴주는 기술이 진짜 기술이다. 이제 배치 돌려놓고 커피 한 잔 하러 가도 된다. 알림이 올 테니까.
