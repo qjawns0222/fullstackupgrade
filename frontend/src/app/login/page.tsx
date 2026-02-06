@@ -14,31 +14,88 @@ export default function LoginPage() {
         formState: { errors }
     } = useForm<LoginFormInputs>();
 
+    const [mfaRequired, setMfaRequired] = React.useState(false);
+    const [loginUsername, setLoginUsername] = React.useState('');
+    const { register: mfaRegister, handleSubmit: mfaHandleSubmit, formState: { errors: mfaErrors } } = useForm<{ otp: string }>();
+
     const onSubmit: SubmitHandler<LoginFormInputs> = async (data) => {
         try {
-            // /api/auth/login 호출 (axios baseURL이 /api라고 가정 시 /auth/login)
-            // 백엔드 Controller가 /api/auth/login 이므로 baseURL이 /api라면 /auth/login이 맞음
             const response = await api.post('/auth/login', {
-                username: data.email, // 백엔드 LoginRequest가 username 필드를 사용함
+                username: data.email,
                 password: data.password
             });
 
+            if (response.data.mfaRequired) {
+                setMfaRequired(true);
+                setLoginUsername(data.email);
+                return;
+            }
+
             const { accessToken, refreshToken } = response.data;
+            handleLoginSuccess(accessToken, refreshToken);
 
-            // 토큰 저장
-            localStorage.setItem('accessToken', accessToken);
-            localStorage.setItem('refreshToken', refreshToken);
-
-            // 헤더 설정 (다음 요청부터 적용)
-            api.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`;
-
-            // 메인 페이지 또는 대시보드로 이동
-            router.push('/');
         } catch (error) {
-            // 에러 처리는 Axios Interceptor가 토스트를 띄워줌
             console.error("Login Failed", error);
         }
     };
+
+    const onMfaSubmit = async (data: { otp: string }) => {
+        try {
+            const response = await api.post('/mfa/verify-login', {
+                username: loginUsername,
+                otp: data.otp
+            });
+
+            const { accessToken, refreshToken } = response.data;
+            handleLoginSuccess(accessToken, refreshToken);
+        } catch (error) {
+            console.error("MFA Validation Failed", error);
+            alert("OTP 인증에 실패했습니다.");
+        }
+    };
+
+    const handleLoginSuccess = (accessToken: string, refreshToken: string) => {
+        localStorage.setItem('accessToken', accessToken);
+        localStorage.setItem('refreshToken', refreshToken);
+        api.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`;
+        router.push('/');
+    };
+
+    if (mfaRequired) {
+        return (
+            <div className="flex min-h-screen items-center justify-center bg-gray-50 p-4">
+                <div className="w-full max-w-md space-y-8 rounded-2xl bg-white p-8 shadow-xl ring-1 ring-gray-900/5">
+                    <div className="text-center">
+                        <h2 className="text-3xl font-bold tracking-tight text-gray-900">2단계 인증</h2>
+                        <p className="mt-2 text-sm text-gray-600">Google Authenticator 앱의 6자리 코드를 입력하세요.</p>
+                    </div>
+                    <form className="mt-8 space-y-6" onSubmit={mfaHandleSubmit(onMfaSubmit)}>
+                        <div>
+                            <label htmlFor="otp" className="block text-sm font-medium text-gray-700">인증 코드</label>
+                            <div className="mt-1">
+                                <input
+                                    id="otp"
+                                    type="text"
+                                    maxLength={6}
+                                    {...mfaRegister("otp", { required: "코드를 입력해주세요", pattern: { value: /^[0-9]{6}$/, message: "6자리 숫자여야 합니다" } })}
+                                    className="block w-full rounded-md border-0 py-2.5 px-3 shadow-sm ring-1 ring-inset sm:text-sm sm:leading-6 ring-gray-300 focus:ring-2 focus:ring-indigo-600"
+                                />
+                                {mfaErrors.otp && (
+                                    <p className="mt-1 text-sm text-red-600">{mfaErrors.otp.message}</p>
+                                )}
+                            </div>
+                        </div>
+                        <button
+                            type="submit"
+                            className="flex w-full justify-center rounded-md bg-indigo-600 px-3 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 transition-colors"
+                        >
+                            인증하기
+                        </button>
+                    </form>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="flex min-h-screen items-center justify-center bg-gray-50 p-4">

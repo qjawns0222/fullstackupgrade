@@ -16,5 +16,7 @@ class User(
         var username: String? = null,
         @field:Size(min = 6, message = "비밀번호는 6자 이상이어야 합니다.") var password: String? = null,
         @field:NotBlank(message = "권한은 필수입니다.") var role: String? = null,
-        var email: String? = null
+        var email: String? = null,
+        var mfaSecret: String? = null,
+        var mfaEnabled: Boolean = false
 )

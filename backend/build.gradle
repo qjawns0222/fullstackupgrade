@@ -88,6 +88,9 @@ dependencies {
     
     // Excel Export
     implementation 'org.apache.poi:poi-ooxml:5.2.5'
+    
+    // TOTP (2FA)
+    implementation 'dev.samstevens.totp:totp:1.7.1'
 }
 
 tasks.named('test') {

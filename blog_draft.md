@@ -1,39 +1,16 @@
-# [Fullstack] 실시간 알림 (WebSocket) + 배치 작업 연동 - 더 이상의 폴링은 없다
+# [Backend] Flyway 도입: ddl-auto update의 위험성 제거
 
-## 1. 멍하니 모니터만 바라보는 것은 죄악이다
-배치 작업은 시스템의 필수 요소지만, 그 완료 시점을 알기 위해 DB를 조회하거나 로그를 새로고침하는 행위는 개발자의 리소스를 낭비하는 가장 멍청한 짓이다. 기존 레거시 코드에는 이런 '기다림'을 해결할 장치가 전무했다. 이메일 알림은 느리고, 스팸함에 처박히기 일쑤다. 즉시성이 보장되지 않는 알림은 알림이 아니다.
+## 도입 배경
+`spring.jpa.hibernate.ddl-auto: update` 옵션은 개발 편의성을 제공하지만, 프로덕션 환경에서는 스키마 불일치 및 데이터 손실 위험이 매우 크다. 더 이상 주먹구구식으로 DB를 관리할 수 없어 형상 관리를 위해 Flyway를 도입했다.
 
-## 2. 왜 WebSocket인가? (Zero-Base Analysis)
-물론 SSE(Server-Sent Events)도 고려해볼 만했다. 하지만 양방향 통신 가능성을 열어두고, STOMP 프로토콜을 통해 메시지 브로커 패턴을 정석적으로 구현하는 것이 확장성 면에서 유리하다. HTTP 폴링? 그건 서버 자원을 하수구에 버리는 짓이다. 우리는 '연결'이 필요하다.
+## 구현 내용
+1. **Flyway 설정**: `build.gradle`에 `flyway-core`, `flyway-mysql` 의존성 추가. `application.yml`에서 ddl-auto를 `validate` 모드로 변경하여 스키마 정합성 검증을 강제했다.
+2. **Migration Script**: `V1__init_schema.sql` 작성하여 초기 테이블 구조를 명시적으로 정의했다.
+3. **Refactoring**: `User` 엔티티의 테이블명을 `users`로 변경했다. H2 및 MariaDB에서 예약어 충돌로 인한 DDL 오류를 방지하기 위함이다.
+4. **Monitoring**: Actuator 엔드포인트를 통해 마이그레이션 상태를 노출하고, 프론트엔드 관리자 페이지에서 이를 확인할 수 있도록 구현했다.
 
-## 3. 구현: Spring Batch와 WebSocket의 만남
-백엔드에서는 `spring-boot-starter-websocket`을 도입했다. 핵심은 `SimpMessagingTemplate`을 배치 리스너(`JobCompletionNotificationListener`)에 주입하는 것이다. 배치가 성공적으로 끝나면(`BatchStatus.COMPLETED`), 즉시 `/topic/notifications` 토픽으로 메시지를 쏜다.
+## 트러블슈팅
+테스트 환경(H2 MySQL Mode)에서 `User` 테이블 생성 시 문법 오류가 발생했다. SQL 표준 예약어 문제임을 확인하고 `users`로 테이블명을 변경하여 해결했다. 또한 `SchemaMigrationTest` 작성 중 H2가 `flyway_schema_history` 테이블을 대문자로 찾는 문제가 있어 쿼팅(`"`) 처리를 통해 해결했다.
 
-```kotlin
-// JobCompletionNotificationListener.kt
-override fun afterJob(jobExecution: JobExecution) {
-    if (jobExecution.status == BatchStatus.COMPLETED) {
-        template.convertAndSend("/topic/notifications", NotificationMessage("Batch Job Completed!"))
-    }
-}
-```
-
-프론트엔드(Next.js)에서는 `sockjs-client`와 `@stomp/stompjs`를 사용해 우아하게 신호를 받는다. 기존에 어설프게 작성되어 있던 `EventSource` 기반의 코드는 가차 없이 폐기했다. 
-
-```typescript
-// useNotification.ts
-const socket = new SockJS('http://localhost:8000/ws');
-const client = new Client({
-    webSocketFactory: () => socket,
-    onConnect: () => {
-        client.subscribe('/topic/notifications', (msg) => {
-            dispatchToast(JSON.parse(msg.body).message, 'success');
-        });
-    }
-});
-```
-
-게이트웨이(Spring Cloud Gateway) 설정도 잊지 말아야 한다. `/ws/**` 경로에 대한 라우팅을 추가해주지 않으면 프론트엔드는 404 에러만 뱉을 것이다.
-
-## 4. 마치며
-기술은 사용자를 편하게 해야 한다. 그리고 시스템 관리자도, 개발자도 결국은 사용자다. 내 시간을 아껴주는 기술이 진짜 기술이다. 이제 배치 돌려놓고 커피 한 잔 하러 가도 된다. 알림이 올 테니까.
+## 결론
+ORM이 제멋대로 DB 스키마를 변경하는 리스크를 제거했다. 스키마 변경 이력은 이제 코드로 관리된다. 래퍼런스는 공식 문서 봐라.

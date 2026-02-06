@@ -6,5 +6,6 @@ data class TokenDto(
         val grantType: String,
         val accessToken: String,
         val refreshToken: String,
-        val accessTokenExpiresIn: Long
+        val accessTokenExpiresIn: Long,
+        val mfaRequired: Boolean = false
 )
