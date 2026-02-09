@@ -91,6 +91,9 @@ dependencies {
     
     // TOTP (2FA)
     implementation 'dev.samstevens.totp:totp:1.7.1'
+
+    // ArchTurn
+    testImplementation 'com.tngtech.archunit:archunit-junit5:1.2.1'
 }
 
 tasks.named('test') {

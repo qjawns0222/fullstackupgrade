@@ -16,7 +16,7 @@ class GlobalExceptionHandler {
     protected fun handleBusinessException(e: BusinessException): ResponseEntity<ErrorResponse> {
         log.error("handleBusinessException", e)
         val errorCode = e.errorCode
-        val response = ErrorResponse.of(errorCode)
+        val response = ErrorResponse(code = errorCode.code, message = errorCode.message)
         return ResponseEntity(response, errorCode.status)
     }
 
@@ -27,7 +27,12 @@ class GlobalExceptionHandler {
     ): ResponseEntity<ErrorResponse> {
         log.error("handleIdempotencyException", e)
         val errorCode = ErrorCode.DUPLICATE_REQUEST
-        val response = ErrorResponse.of(errorCode, e.message ?: errorCode.message)
+        val response =
+                ErrorResponse(
+                        code = errorCode.code,
+                        message = errorCode.message,
+                        detail = e.message ?: errorCode.message
+                )
         return ResponseEntity(response, errorCode.status)
     }
 
@@ -35,8 +40,13 @@ class GlobalExceptionHandler {
     @ExceptionHandler(Exception::class)
     protected fun handleException(e: Exception): ResponseEntity<ErrorResponse> {
         log.error("handleException", e)
+        val errorCode = ErrorCode.INTERNAL_SERVER_ERROR
         val response =
-                ErrorResponse.of(ErrorCode.INTERNAL_SERVER_ERROR, e.message ?: "Unknown Error")
-        return ResponseEntity(response, ErrorCode.INTERNAL_SERVER_ERROR.status)
+                ErrorResponse(
+                        code = errorCode.code,
+                        message = errorCode.message,
+                        detail = e.message ?: "Unknown Error"
+                )
+        return ResponseEntity(response, errorCode.status)
     }
 }

@@ -29,22 +29,18 @@ class SchemaMigrationTest {
                 val flywayCount =
                         jdbcTemplate.queryForObject(
                                 "SELECT count(*) FROM \"flyway_schema_history\"",
-                                Long::class.javaObjectType
+                                Long::class.java
                         )
+                                ?: 0L
                 assertThat(flywayCount).isGreaterThanOrEqualTo(1L)
 
                 // Verify 'users' table exists
                 val userTableCount =
                         jdbcTemplate.queryForObject(
                                 "SELECT count(*) FROM information_schema.tables WHERE table_name = 'users' OR table_name = 'USERS'",
-                                Long::class.javaObjectType
+                                Long::class.java
                         )
-                assertThat(userTableCount)
-                        .isGreaterThanOrEqualTo(
-                                1L
-                        ) // Note: H2 default case might be upper case 'USER'. MariaDB/MySQL depends
-                // on OS.
-                // But we are likely running tests with H2 unless testcontainers is used.
-                // Wait, build.gradle has h2 for test.
+                                ?: 0L
+                assertThat(userTableCount).isGreaterThanOrEqualTo(1L)
         }
 }

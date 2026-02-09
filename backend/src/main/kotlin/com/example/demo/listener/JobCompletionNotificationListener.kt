@@ -18,7 +18,7 @@ class JobCompletionNotificationListener(private val template: SimpMessagingTempl
             logger.info("!!! JOB FINISHED! Broadcasting notification via WebSocket")
             template.convertAndSend(
                     "/topic/notifications",
-                    com.example.demo.controller.NotificationMessage(
+                    com.example.demo.dto.NotificationMessage(
                             "Batch Job Completed: Tech Trend Analysis Finished!"
                     )
             )

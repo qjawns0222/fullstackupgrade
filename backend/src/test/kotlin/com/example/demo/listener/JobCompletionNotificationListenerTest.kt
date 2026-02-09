@@ -1,6 +1,6 @@
 package com.example.demo.listener
 
-import com.example.demo.controller.NotificationMessage
+import com.example.demo.dto.NotificationMessage
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.InjectMocks
@@ -14,43 +14,46 @@ import org.springframework.messaging.simp.SimpMessagingTemplate
 @ExtendWith(MockitoExtension::class)
 class JobCompletionNotificationListenerTest {
 
-    @Mock lateinit var template: SimpMessagingTemplate
+        @Mock lateinit var template: SimpMessagingTemplate
 
-    @InjectMocks lateinit var listener: JobCompletionNotificationListener
+        @InjectMocks lateinit var listener: JobCompletionNotificationListener
 
-    @Test
-    fun `should send notification when job completes`() {
-        // Given
-        val jobExecution = JobExecution(1L)
-        jobExecution.status = BatchStatus.COMPLETED
+        @Test
+        fun `should send notification when job completes`() {
+                // Given
+                val jobExecution = JobExecution(1L)
+                jobExecution.status = BatchStatus.COMPLETED
 
-        // When
-        listener.afterJob(jobExecution)
+                // When
+                listener.afterJob(jobExecution)
 
-        // Then
-        verify(template)
-                .convertAndSend(
-                        "/topic/notifications",
-                        NotificationMessage("Batch Job Completed: Tech Trend Analysis Finished!")
-                )
-    }
+                // Then
+                verify(template)
+                        .convertAndSend(
+                                "/topic/notifications",
+                                NotificationMessage(
+                                        "Batch Job Completed: Tech Trend Analysis Finished!"
+                                )
+                        )
+        }
 
-    @Test
-    fun `should not send notification when job fails`() {
-        // Given
-        val jobExecution = JobExecution(1L)
-        jobExecution.status = BatchStatus.FAILED
+        @Test
+        fun `should not send notification when job fails`() {
+                // Given
+                val jobExecution = JobExecution(1L)
+                jobExecution.status = BatchStatus.FAILED
 
-        // When
-        listener.afterJob(jobExecution)
+                // When
+                listener.afterJob(jobExecution)
 
-        // Then
-        // verifying no interaction with template is too strict if logger is used, but template call
-        // specifically:
-        verify(template, org.mockito.Mockito.never())
-                .convertAndSend(
-                        org.mockito.ArgumentMatchers.anyString(),
-                        org.mockito.ArgumentMatchers.any(NotificationMessage::class.java)
-                )
-    }
+                // Then
+                // verifying no interaction with template is too strict if logger is used, but
+                // template call
+                // specifically:
+                verify(template, org.mockito.Mockito.never())
+                        .convertAndSend(
+                                org.mockito.ArgumentMatchers.anyString(),
+                                org.mockito.ArgumentMatchers.any(NotificationMessage::class.java)
+                        )
+        }
 }

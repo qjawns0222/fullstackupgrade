@@ -1,5 +1,7 @@
 package com.example.demo.controller
 
+import com.example.demo.dto.MfaSetupResponse
+import com.example.demo.dto.MfaVerifyRequest
 import com.example.demo.dto.TokenDto
 import com.example.demo.repository.UserRepository
 import com.example.demo.service.AuthService
@@ -8,13 +10,6 @@ import org.springframework.http.ResponseEntity
 import org.springframework.security.core.annotation.AuthenticationPrincipal
 import org.springframework.security.core.userdetails.UserDetails
 import org.springframework.web.bind.annotation.*
-
-data class MfaSetupResponse(val secret: String, val qrCodeUri: String)
-
-data class MfaVerifyRequest(
-        val username: String, // Or temporary token
-        val otp: String // 6 digit code
-)
 
 @RestController
 @RequestMapping("/api/mfa")
