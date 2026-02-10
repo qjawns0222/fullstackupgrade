@@ -1,11 +1,10 @@
 package com.example.demo.aop
 
 import com.example.demo.annotation.AuditLog
-import com.example.demo.document.AuditLogDocument
-import com.example.demo.repository.AuditLogRepository
+import com.example.demo.dto.AuditLogMessage
+import com.example.demo.service.AuditLogProducer
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.time.LocalDateTime
-import java.util.concurrent.CompletableFuture
 import org.aspectj.lang.ProceedingJoinPoint
 import org.aspectj.lang.annotation.Around
 import org.aspectj.lang.annotation.Aspect
@@ -17,7 +16,7 @@ import org.springframework.stereotype.Component
 @Aspect
 @Component
 class AuditLogAspect(
-        private val auditLogRepository: AuditLogRepository,
+        private val auditLogProducer: AuditLogProducer,
         private val objectMapper: ObjectMapper
 ) {
 
@@ -52,24 +51,21 @@ class AuditLogAspect(
             errorMessage = e.message
             throw e
         } finally {
-            // Async logging to avoid blocking the main thread
-            CompletableFuture.runAsync {
-                try {
-                    val logDoc =
-                            AuditLogDocument(
-                                    userId = userId,
-                                    action = auditLog.action.ifBlank { methodName },
-                                    description = auditLog.description,
-                                    params = paramsJson,
-                                    status = status,
-                                    errorMessage = errorMessage,
-                                    timestamp = LocalDateTime.now()
-                            )
-                    auditLogRepository.save(logDoc)
-                    logger.info("Audit log saved: $logDoc")
-                } catch (e: Exception) {
-                    logger.error("Failed to save audit log", e)
-                }
+            // Async logging via RabbitMQ
+            try {
+                val logMessage =
+                        AuditLogMessage(
+                                userId = userId,
+                                action = auditLog.action.ifBlank { methodName },
+                                description = auditLog.description,
+                                params = paramsJson,
+                                status = status,
+                                errorMessage = errorMessage,
+                                timestamp = LocalDateTime.now()
+                        )
+                auditLogProducer.sendAuditLog(logMessage)
+            } catch (e: Exception) {
+                logger.error("Failed to send audit log message to producer", e)
             }
         }
     }
