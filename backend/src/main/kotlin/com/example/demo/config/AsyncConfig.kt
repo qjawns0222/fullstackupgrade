@@ -24,6 +24,19 @@ class AsyncConfig : AsyncConfigurer {
         executor.setThreadNamePrefix("MailAsync-")
         executor.setWaitForTasksToCompleteOnShutdown(true)
         executor.setAwaitTerminationSeconds(60)
+        executor.setTaskDecorator { runnable ->
+            val context = org.slf4j.MDC.getCopyOfContextMap()
+            Runnable {
+                if (context != null) {
+                    org.slf4j.MDC.setContextMap(context)
+                }
+                try {
+                    runnable.run()
+                } finally {
+                    org.slf4j.MDC.clear()
+                }
+            }
+        }
         executor.initialize()
         return executor
     }

@@ -44,6 +44,7 @@ class RabbitMqConfig {
     fun rabbitTemplate(connectionFactory: ConnectionFactory): RabbitTemplate {
         val template = RabbitTemplate(connectionFactory)
         template.messageConverter = messageConverter()
+        template.setObservationEnabled(true)
         return template
     }
 }
