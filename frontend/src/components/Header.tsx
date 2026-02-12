@@ -30,6 +30,14 @@ export default function Header() {
                         >
                             Login
                         </Link>
+                        <Link
+                            href="/admin/jobs"
+                            className="text-gray-600 hover:text-indigo-600 dark:text-gray-300 dark:hover:text-indigo-400 font-medium transition-colors"
+                        >
+                            Jobs
+                        </Link>
+
+
                     </nav>
 
                     {/* Mobile Menu Placeholder (Optional for now) */}
@@ -38,6 +46,6 @@ export default function Header() {
                     </div>
                 </div>
             </div>
-        </header>
+        </header >
     );
 }
