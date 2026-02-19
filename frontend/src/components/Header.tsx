@@ -36,6 +36,13 @@ export default function Header() {
                         >
                             Jobs
                         </Link>
+                        <Link
+                            href="http://localhost:8080/swagger-ui/index.html"
+                            target="_blank"
+                            className="text-gray-600 hover:text-indigo-600 dark:text-gray-300 dark:hover:text-indigo-400 font-medium transition-colors"
+                        >
+                            API Docs
+                        </Link>
 
 
                     </nav>
