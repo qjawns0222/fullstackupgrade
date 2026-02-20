@@ -57,6 +57,14 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+
+aws:
+  s3:
+    endpoint: http://localhost:9000
+    access-key: minioadmin
+    secret-key: minioadmin
+    bucket: aiblog-bucket
+    
   tracing:
     sampling:
       probability: 1.0

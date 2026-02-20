@@ -1,4 +1,4 @@
-# [Fullstack] Spring Boot + Next.js 프로젝트에 Swagger UI (SpringDoc) 도입하기 + 설날 근황
+# [Fullstack] Spring Boot + Next.js 프로젝트에 Swagger UI (SpringDoc) 도입하기 + 설날 근황 [Revised 3]
 
 안녕하세요! 4년차 백엔드 개발자입니다.
 오늘은 사이드 프로젝트인 '여러 기능 삽입 테스트 프로젝트'에 **API 문서 자동화**를 도입한 과정을 정리해보려고 합니다.

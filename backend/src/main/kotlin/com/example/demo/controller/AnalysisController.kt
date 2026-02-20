@@ -3,28 +3,33 @@ package com.example.demo.controller
 import com.example.demo.entity.AnalysisRequest
 import com.example.demo.event.AiAnalysisEvent
 import com.example.demo.repository.AnalysisRequestRepository
+import com.example.demo.service.S3Service
+import java.security.Principal
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import org.springframework.web.multipart.MultipartFile
-import java.security.Principal
 
 @RestController
 @RequestMapping("/api/analysis")
 class AnalysisController(
-    private val repository: AnalysisRequestRepository,
-    private val eventPublisher: ApplicationEventPublisher
+        private val repository: AnalysisRequestRepository,
+        private val eventPublisher: ApplicationEventPublisher,
+        private val s3Service: S3Service
 ) {
 
     @PostMapping
     fun uploadFile(
-        @RequestParam("file") file: MultipartFile,
-        principal: Principal?
+            @RequestParam("file") file: MultipartFile,
+            principal: Principal?
     ): ResponseEntity<Map<String, Any>> {
-        // 1. Save initial record
+        // 1. Upload file to S3
+        val fileKey = s3Service.uploadFile(file)
+
+        // 2. Save initial record
         // originalFilename can be null, handle it
         val fileName = file.originalFilename ?: "unknown_file"
-        val request = AnalysisRequest(fileName)
+        val request = AnalysisRequest(fileName, fileKey)
         val savedRequest = repository.save(request)
 
         val username = principal?.name ?: "anonymous"
@@ -46,8 +51,9 @@ class AnalysisController(
 
     @GetMapping("/{id}")
     fun getStatus(@PathVariable id: Long): ResponseEntity<AnalysisRequest> {
-        return repository.findById(id)
-            .map { ResponseEntity.ok(it) }
-            .orElse(ResponseEntity.notFound().build())
+        return repository
+                .findById(id)
+                .map { ResponseEntity.ok(it) }
+                .orElse(ResponseEntity.notFound().build())
     }
 }

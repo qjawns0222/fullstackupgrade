@@ -50,7 +50,31 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+
+  minio-setup:
+    image: minio/mc:latest
+    container_name: minio-setup
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin &&
+      /usr/bin/mc mb myminio/aiblog-bucket || true &&
+      /usr/bin/mc anonymous set public myminio/aiblog-bucket
+      "
+
 volumes:
   grafana-data:
-
-
+  minio-data:

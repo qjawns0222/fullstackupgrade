@@ -88,7 +88,7 @@ export default function AnalysisPage() {
     return (
         <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
             <div className="max-w-md w-full bg-white rounded-xl shadow-lg p-8">
-                <h1 className="text-2xl font-bold text-gray-800 mb-6 text-center">AI 분석 요청</h1>
+                <h1 className="text-2xl font-bold text-gray-800 mb-6 text-center">AI 분석 요청 (S3 Object Storage 연동)</h1>
 
                 {/* Upload Section */}
                 {status === "IDLE" && (

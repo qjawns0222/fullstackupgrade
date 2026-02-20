@@ -6,19 +6,14 @@ import java.time.LocalDateTime
 @Entity
 @Table(name = "analysis_requests")
 class AnalysisRequest(
-    @Column(nullable = false)
-    var originalFileName: String
+        @Column(nullable = false) var originalFileName: String,
+        @Column(nullable = true) var fileKey: String? = null
 ) {
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    var id: Long? = null
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY) var id: Long? = null
 
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    var status: Status = Status.PENDING
+    @Enumerated(EnumType.STRING) @Column(nullable = false) var status: Status = Status.PENDING
 
-    @Column(columnDefinition = "TEXT")
-    var result: String? = null
+    @Column(columnDefinition = "TEXT") var result: String? = null
 
     var createdAt: LocalDateTime = LocalDateTime.now()
 
