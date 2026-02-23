@@ -100,6 +100,9 @@ dependencies {
     // TOTP (2FA)
     implementation 'dev.samstevens.totp:totp:1.7.1'
 
+    // OCR (Optical Character Recognition)
+    implementation 'net.sourceforge.tess4j:tess4j:5.10.0'
+
     // AWS S3 (for MinIO Object Storage)
     implementation 'software.amazon.awssdk:s3:2.21.29'
     implementation 'software.amazon.awssdk:apache-client:2.21.29'

@@ -1,64 +1,13 @@
-# [Fullstack] Spring Boot + Next.js 프로젝트에 Swagger UI (SpringDoc) 도입하기 + 설날 근황 [Revised 3]
+제목: [Fullstack] 분산 파일 처리용 S3(MinIO) 스토리지 연동 및 구조적 한계 고찰
 
-안녕하세요! 4년차 백엔드 개발자입니다.
-오늘은 사이드 프로젝트인 '여러 기능 삽입 테스트 프로젝트'에 **API 문서 자동화**를 도입한 과정을 정리해보려고 합니다.
+오늘은 기존 코드의 치명적인 결함을 하나 짚고 넘어가야겠다.
+기존 AI 분석 파이프라인을 뜯어보니 사용자가 업로드한 파일을 로컬에서만 쥐고 있다가, 파일명만 덜렁 DB에 박아놓고 정작 중요한 파일 데이터는 메모리에서 날려버리고 있었다.
+트래픽이 조금만 몰리거나 비동기 처리를 담당하는 서버가 내려가면 데이터가 통째로 유실되는, 실무에서는 상상도 할 수 없는 쓰레기 같은 구조였다. 
 
-혼자 개발하더라도 프론트엔드와 백엔드를 오가다 보면 "아, 이 API 파라미터가 뭐였지?" 하고 헷갈릴 때가 많습니다. 매번 코드를 열어보기도 귀찮고요. 그래서 **SpringDoc OpenAPI**를 적용하여 Swagger UI를 띄워보기로 했습니다.
+그래서 분산 스토리지인 MinIO를 도입하여 S3 연동 구조로 뜯어고쳤다.
+이제 AnalysisController에서 파일을 받으면 무조건 S3에 먼저 업로드해서 객체 키를 발급받고, 그걸 DB에 기록한다.
+그 이후 비동기로 도는 AiAnalysisEventListener가 S3에서 안전하게 파일을 내려받아 분석을 수행하게 된다. 
 
-## 1. 문제 상황 (Why?)
-- API 명세서가 없어서 프론트엔드 개발 시 백엔드 코드를 뒤져봐야 함.
-- Postman 컬렉션을 관리하는 것도 귀찮음.
-- 코드와 문서의 싱크가 안 맞을 위험이 있음.
-
-## 2. 해결 방안 (Solution)
-- **SpringDoc OpenAPI v3** 라이브러리를 사용.
-- 어노테이션 기반으로 문서를 자동 생성.
-- Next.js 프론트엔드 헤더에 'API Docs' 링크 추가.
-
-## 3. 적용 과정
-
-### 3-1. 의존성 추가 (build.gradle)
-먼저 `build.gradle`에 의존성을 추가합니다. Spring Boot 3.2.0을 사용 중이라 호환되는 버전을 선택했습니다.
-
-```groovy
-implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.3.0'
-```
-
-### 3-2. Config 설정 (OpenApiConfig.kt)
-기본적인 문서 타이틀과 버전을 설정합니다.
-
-```kotlin
-@Configuration
-class OpenApiConfig {
-    @Bean
-    fun openAPI(): OpenAPI {
-        return OpenAPI()
-            .info(Info()
-                .title("AI Blog API")
-                .description("API documentation for AI Blog service")
-                .version("v1.0"))
-    }
-}
-```
-
-### 3-3. 프론트엔드 연동 (Header.tsx)
-개발 편의성을 위해 헤더에 바로 접근할 수 있는 링크를 달아두었습니다.
-
-```tsx
-<Link href="http://localhost:8080/swagger-ui/index.html" target="_blank">
-    API Docs
-</Link>
-```
-
-## 4. 마치며 & 근황 (Lunar New Year Update) 🙇‍♂️
-
-이렇게 해서 아주 간단하게 API 문서를 확보했습니다. 이제 프론트엔드 개발이 한결 수월해지겠네요.
-
-**그리고... 사실 이번 포스팅이 좀 많이 늦어졌습니다.** 😅
-핑계라면 핑계지만, **설날 연휴 동안 푹 쉬고 오느라 블로그 작성을 도통 못 했습니다.** (맛있는 것도 많이 먹고 리프레시 제대로 했습니다!)
-연휴 후유증을 털어내고 다시 열심히 기능을 추가해볼 생각입니다. 다들 늦었지만 새해 복 많이 받으세요! 🙇‍♂️
-
-다음에는 이 Swagger UI에 인증(JWT) 토큰을 끼얹어서 테스트하는 방법을 정리해보겠습니다.
-
----
-*Tags: SpringBoot, Kotlin, Swagger, OpenAPI, Next.js, Fullstack, DevLog*
+프론트엔드쪽 UI에도 기능을 반영했지만 근본적인 아키텍처는 여전히 불안하다.
+이벤트 발행 자체도 트랜잭션과 강하게 묶여있지 않고 인메모리 Async를 쓰기 때문에 브로커 레벨(Kafka 등)의 개편이 병행되지 않으면 완벽하지 않다.
+이 문제들을 완전히 뜯어고칠 만한 완벽한 레퍼런스는 지금 당장 존재하지 않는다. 없으면 없다고 판단하고 일단 할 수 있는 급한 불만 객체스토리지 도입으로 껐다. 코드는 돌아가겠지만 아직 갈 길이 멀다.

@@ -6,6 +6,7 @@ import com.example.demo.event.ResumeSearchEvent
 import com.example.demo.repository.AnalysisRequestRepository
 import com.example.demo.repository.ResumeRepository
 import com.example.demo.repository.UserRepository
+import com.example.demo.service.OcrService
 import com.example.demo.service.S3Service
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
@@ -26,7 +27,8 @@ class AiAnalysisEventListener(
         private val topic: ChannelTopic,
         private val objectMapper: ObjectMapper,
         private val eventPublisher: ApplicationEventPublisher,
-        private val s3Service: S3Service
+        private val s3Service: S3Service,
+        private val ocrService: OcrService
 ) {
 
     private val log = LoggerFactory.getLogger(AiAnalysisEventListener::class.java)
@@ -45,23 +47,23 @@ class AiAnalysisEventListener(
         repository.saveAndFlush(request) // Ensure status update is committed
 
         try {
+            var analysisResult = "No file data to process"
+
             // Download file from S3 if available
             if (request.fileKey != null) {
                 log.info("Downloading file from S3 with key: {}", request.fileKey)
                 val fileData = s3Service.downloadFile(request.fileKey!!)
                 log.info("Successfully downloaded file of size: {} bytes", fileData.size)
+
+                // Perform OCR
+                log.info("Starting OCR processing...")
+                analysisResult = ocrService.doOcr(fileData)
+                log.info("OCR processing completed.")
             } else {
                 log.warn("No fileKey found for Request ID: {}", requestId)
             }
 
-            // Simulate heavy AI processing
-            Thread.sleep(5000)
-
-            val mockResult =
-                    "AI Analysis Result for " +
-                            request.originalFileName +
-                            " (Processed from S3): Success! (Mock Data)"
-            request.complete(mockResult)
+            request.complete(analysisResult)
             repository.saveAndFlush(request) // Save completed state
             log.info("AI Analysis Completed for Request ID: {}", requestId)
 
