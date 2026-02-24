@@ -146,18 +146,36 @@ export default function AnalysisPage() {
                         <div className="bg-gray-50 p-4 rounded-lg text-left border border-gray-100">
                             <p className="text-gray-700 whitespace-pre-wrap">{result}</p>
                         </div>
-                        <button
-                            onClick={() => {
-                                setStatus("IDLE");
-                                setFile(null);
-                                setResult(null);
-                                setUploadId(null);
-                                setProgress(0);
-                            }}
-                            className="mt-4 text-blue-600 hover:text-blue-800 font-semibold"
-                        >
-                            다른 파일 분석하기
-                        </button>
+                        <div className="flex flex-col gap-3">
+                            <button
+                                onClick={async () => {
+                                    const res = await fetch(`http://localhost:8000/api/analysis/${uploadId}/export`);
+                                    if (res.ok) {
+                                        const blob = await res.blob();
+                                        const url = window.URL.createObjectURL(blob);
+                                        const a = document.createElement("a");
+                                        a.href = url;
+                                        a.download = `analysis_report_${uploadId}.pdf`;
+                                        a.click();
+                                    }
+                                }}
+                                className="w-full py-2 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg shadow-sm transition-colors"
+                            >
+                                PDF 리포트 다운로드
+                            </button>
+                            <button
+                                onClick={() => {
+                                    setStatus("IDLE");
+                                    setFile(null);
+                                    setResult(null);
+                                    setUploadId(null);
+                                    setProgress(0);
+                                }}
+                                className="text-blue-600 hover:text-blue-800 font-semibold"
+                            >
+                                다른 파일 분석하기
+                            </button>
+                        </div>
                     </div>
                 )}
 

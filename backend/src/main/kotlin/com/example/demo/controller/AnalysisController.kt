@@ -3,6 +3,7 @@ package com.example.demo.controller
 import com.example.demo.entity.AnalysisRequest
 import com.example.demo.event.AiAnalysisEvent
 import com.example.demo.repository.AnalysisRequestRepository
+import com.example.demo.service.PdfService
 import com.example.demo.service.S3Service
 import java.security.Principal
 import org.springframework.context.ApplicationEventPublisher
@@ -15,8 +16,27 @@ import org.springframework.web.multipart.MultipartFile
 class AnalysisController(
         private val repository: AnalysisRequestRepository,
         private val eventPublisher: ApplicationEventPublisher,
-        private val s3Service: S3Service
+        private val s3Service: S3Service,
+        private val pdfService: PdfService
 ) {
+
+    @GetMapping("/{id}/export")
+    fun exportReport(@PathVariable id: Long): ResponseEntity<ByteArray> {
+        val request = repository.findById(id).orElseThrow { RuntimeException("Request not found") }
+        if (request.status != com.example.demo.entity.AnalysisRequest.Status.COMPLETED) {
+            throw RuntimeException("Report not ready")
+        }
+
+        val pdf = pdfService.generateAnalysisReport(request)
+
+        val headers = org.springframework.http.HttpHeaders()
+        headers.add("Content-Disposition", "attachment; filename=analysis_report_${id}.pdf")
+
+        return ResponseEntity.ok()
+                .headers(headers)
+                .contentType(org.springframework.http.MediaType.APPLICATION_PDF)
+                .body(pdf)
+    }
 
     @PostMapping
     fun uploadFile(
