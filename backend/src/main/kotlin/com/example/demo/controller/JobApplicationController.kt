@@ -5,6 +5,7 @@ import com.example.demo.dto.JobApplicationResponse
 import com.example.demo.repository.UserRepository
 import com.example.demo.service.ExcelService
 import com.example.demo.service.JobApplicationService
+import com.example.demo.state.JobApplicationEvent
 import java.security.Principal
 import org.springframework.core.io.InputStreamResource
 import org.springframework.http.HttpHeaders
@@ -88,5 +89,15 @@ class JobApplicationController(
         val userId = getUserId(principal)
         jobApplicationService.deleteApplication(id, userId)
         return ResponseEntity.noContent().build()
+    }
+
+    @PostMapping("/{id}/status")
+    fun changeStatus(
+            @PathVariable id: Long,
+            @RequestParam event: JobApplicationEvent,
+            principal: Principal
+    ): ResponseEntity<JobApplicationResponse> {
+        val userId = getUserId(principal)
+        return ResponseEntity.ok(jobApplicationService.changeStatus(id, userId, event))
     }
 }

@@ -6,14 +6,22 @@ import com.example.demo.dto.JobApplicationResponse
 import com.example.demo.entity.JobApplication
 import com.example.demo.repository.JobApplicationRepository
 import com.example.demo.repository.UserRepository
+import com.example.demo.state.JobApplicationEvent
+import com.example.demo.state.JobApplicationState
 import java.time.LocalDateTime
+import org.springframework.messaging.support.MessageBuilder
+import org.springframework.statemachine.config.StateMachineFactory
+import org.springframework.statemachine.support.DefaultStateMachineContext
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import reactor.core.publisher.Mono
 
 @Service
 class JobApplicationService(
         private val jobApplicationRepository: JobApplicationRepository,
-        private val userRepository: UserRepository
+        private val userRepository: UserRepository,
+        private val stateMachineFactory:
+                StateMachineFactory<JobApplicationState, JobApplicationEvent>
 ) {
 
     @Transactional(readOnly = true)
@@ -93,6 +101,53 @@ class JobApplicationService(
         }
 
         jobApplicationRepository.delete(application)
+    }
+
+    @Transactional
+    @AuditLog(
+            action = "CHANGE_STATUS",
+            description = "User triggered a state transition for a job application"
+    )
+    fun changeStatus(id: Long, userId: Long, event: JobApplicationEvent): JobApplicationResponse {
+        val application =
+                jobApplicationRepository.findById(id).orElseThrow {
+                    IllegalArgumentException("Application not found")
+                }
+
+        if (application.user.id != userId) {
+            throw IllegalArgumentException("Unauthorized access")
+        }
+
+        // 1. Create and reset State Machine to current state
+        val stateMachine = stateMachineFactory.getStateMachine(id.toString())
+        stateMachine.stopReactively().block()
+
+        stateMachine.stateMachineAccessor.doWithAllRegions { accessor ->
+            accessor.resetStateMachineReactively(
+                            DefaultStateMachineContext(
+                                    JobApplicationState.valueOf(application.status.name),
+                                    null,
+                                    null,
+                                    null
+                            )
+                    )
+                    .block()
+        }
+
+        stateMachine.startReactively().block()
+
+        // 2. Send Event
+        val result =
+                stateMachine
+                        .sendEvent(Mono.just(MessageBuilder.withPayload(event).build()))
+                        .blockLast()
+
+        // 3. Update Entity State based on Machine State
+        val newState = stateMachine.state.id
+        application.status = com.example.demo.entity.JobApplicationStatus.valueOf(newState.name)
+        application.updatedAt = LocalDateTime.now()
+
+        return toResponse(jobApplicationRepository.save(application))
     }
 
     private fun toResponse(application: JobApplication): JobApplicationResponse {

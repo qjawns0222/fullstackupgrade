@@ -1,21 +1,65 @@
-[Fullstack] Tesseract OCR 기반의 지능형 문서 분석 시스템 구축
+[Fullstack] AI 분석 결과 PDF 리포트 자동 생성 시스템 구축
 
-지난 며칠간 우리 프로젝트의 AI 분석 기능을 들여다보면서 한 가지 아쉬운 점을 발견했다. 사용자가 이미지를 업로드하면 S3에 저장하고 "분석 중"이라는 메시지만 띄울 뿐, 실제로는 그 안의 텍스트를 전혀 읽지 못하고 있었다. 시니어 백엔드 입장에서 이런 '블랙박스' 처리는 참을 수 없는 일이다.
+AI 분석 결과를 단순히 화면으로만 보는 것이 아니라, 문서화하여 보관하고 싶은 요구사항이 생겼다. 시니어 개발자로서 이러한 '리포트 다운로드' 기능은 서비스의 완성도를 결정짓는 핵심 요소라고 생각한다. 이번 미션에서는 OpenPDF 라이브러리를 활용해 AI 분석 결과(OCR 텍스트 등)를 PDF로 정교하게 렌더링하고 다운로드할 수 있는 기능을 구현했다.
 
-그래서 이번 미션은 Tess4J(Tesseract OCR의 Java Wrapper)를 도입해, 서버가 업로드된 이미지에서 직접 텍스트를 추출하고 이를 분석 결과로 활용하는 시스템을 구축하는 것으로 잡았다.
+### 기술적 도전: PDF 렌더링 및 스트림 처리
 
-### 왜 Tess4J인가?
+단순히 텍스트를 파일로 저장하는 것이 아니라, 문서의 구조(제목, 메타데이터, 결과 본문)를 잡고 폰트와 레이아웃을 설정하는 것이 핵심이었다. 또한, 서버 메모리 효율을 위해 `ByteArrayOutputStream`을 활용해 결과물을 생성하고, 이를 클라이언트로 신속하게 스트리밍하는 구조를 채택했다.
 
-단순히 외부 API를 호출할 수도 있었지만, 시스템의 독립성과 로우 레벨 제어력을 위해 Tesseract를 직접 활용하기로 했다. 인프라 관점에서 보면 네이티브 라이브러리 의존성(tessdata 등)을 관리해야 하는 까다로운 작업이지만, 그만큼 시스템의 자생력을 높여준다.
+### 핵심 구현 코드 스니펫 (무조건 포함)
 
-### 구현 핵심 포인트
+#### 1. PdfService: 도큐먼트 생성 로직
+이 서비스는 `AnalysisRequest` 엔티티를 받아 OpenPDF를 통해 문서를 빌드한다.
 
-1. TesseractConfig: 스프링 빈으로 ITesseract를 설정했다. 한국어와 영어를 동시에 지원하도록 한글(kor)과 영어(eng) 데이터를 로드했다.
-2. OcrService: S3에서 내려받은 바이트 배열을 임시 파일로 변환하여 Tesseract 엔진에 전달한다. 이 과정에서 메모리 효율과 파일 정리를 위해 try-finally 블록으로 철저히 자원 관리를 수행했다.
-3. 비동기 이벤트 연동: AiAnalysisEventListener에서 기존의 가짜 대기 시간(Thread.sleep)을 제거하고, 실시간 OCR 처리 로직을 삽입했다. 이제 사용자는 분석 완료 후 실제 이미지 속의 텍스트를 보게 된다.
+```kotlin
+@Service
+class PdfService {
+    fun generateAnalysisReport(request: AnalysisRequest): ByteArray {
+        val out = ByteArrayOutputStream()
+        val document = Document()
+        PdfWriter.getInstance(document, out)
+        
+        document.open()
+        
+        val titleFont = Font(Font.HELVETICA, 18f, Font.BOLD)
+        val normalFont = Font(Font.HELVETICA, 12f, Font.NORMAL)
+
+        document.add(Paragraph("AI Analysis Report", titleFont))
+        document.add(Paragraph("Filename: ${request.originalFileName}", normalFont))
+        document.add(Paragraph("Analysis Result:", Font(Font.HELVETICA, 14f, Font.BOLD)))
+        document.add(Paragraph(request.result ?: "No result available.", normalFont))
+        
+        document.close()
+        return out.toByteArray()
+    }
+}
+```
+
+#### 2. AnalysisController: 다운로드 엔드포인트
+생성된 PDF를 클라이언트에 전달하기 위해 `ResponseEntity`와 적절한 `HTTP Headers`를 설정했다.
+
+```kotlin
+@GetMapping("/{id}/export")
+fun exportReport(@PathVariable id: Long): ResponseEntity<ByteArray> {
+    val request = repository.findById(id).orElseThrow { RuntimeException("Request not found") }
+    val pdf = pdfService.generateAnalysisReport(request)
+    
+    val headers = HttpHeaders()
+    headers.add("Content-Disposition", "attachment; filename=analysis_report_${id}.pdf")
+    
+    return ResponseEntity.ok()
+            .headers(headers)
+            .contentType(MediaType.APPLICATION_PDF)
+            .body(pdf)
+}
+```
+
+### 프론트엔드 연동
+
+사용자 경험을 위해 분석이 완료된 상태에서만 'PDF 리포트 다운로드' 버튼이 활성화되도록 구현했다. `fetch`를 통해 받은 블롭(Blob) 데이터를 브라우저에서 파일로 자동 다운로드하는 로직을 React 컴포넌트에 통합했다.
 
 ### 개인적인 생각
 
-OCR 도입은 단순한 기능 추가 이상의 의미가 있다. 바이너리 데이터를 시스템이 '이해'하기 시작했다는 점에서 진정한 AI 분석 서비스의 기초를 닦았다고 본다. 앞으로는 이 텍스트를 기반으로 LLM과 연동해 요약이나 키워드 추출까지 확장할 계획이다.
+단순한 데이터 조회를 넘어 문서 형태의 결과물을 제공함으로써, 서비스의 신뢰도가 한 단계 격상되었다고 본다. 특히 Tess4J를 통한 OCR 기능과 연계되어, "이미지를 업로드하면 그 안의 글자를 추출해 정식 PDF 리포트로 만들어주는" 일관된 사용자 흐름을 완성했다는 점이 고무적이다.
 
-테스트 코드도 꼼꼼히 작성했으니, 앞으로 안정적인 운영이 기대된다. 실제 돌아가는 모습은 프론트엔드 분석 페이지에서 즉시 확인할 수 있다.
+앞으로는 PDF 내에 그래프나 분석 통계를 추가해 더욱 풍성한 리포트를 만들 수 있도록 확장할 예정이다.
