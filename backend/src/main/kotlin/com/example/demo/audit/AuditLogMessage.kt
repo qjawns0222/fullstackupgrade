@@ -1,4 +1,4 @@
-package com.example.demo.dto
+package com.example.demo.audit
 
 import java.time.LocalDateTime
 

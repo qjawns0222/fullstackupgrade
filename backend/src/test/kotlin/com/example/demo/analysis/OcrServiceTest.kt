@@ -1,4 +1,4 @@
-package com.example.demo.service
+package com.example.demo.analysis
 
 import java.io.File
 import net.sourceforge.tess4j.ITesseract

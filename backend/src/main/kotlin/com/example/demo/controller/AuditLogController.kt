@@ -1,7 +1,7 @@
 package com.example.demo.controller
 
-import com.example.demo.document.AuditLogDocument
-import com.example.demo.repository.AuditLogRepository
+import com.example.demo.audit.AuditLogDocument
+import com.example.demo.audit.AuditLogRepository
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.tags.Tag
 import org.springframework.data.domain.Page

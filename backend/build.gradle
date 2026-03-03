@@ -8,6 +8,10 @@ plugins {
     id 'org.jetbrains.kotlin.kapt' version '1.9.20'
 }
 
+ext {
+    set('springModulithVersion', "1.1.0")
+}
+
 group = 'com.example'
 version = '0.0.1-SNAPSHOT'
 
@@ -23,6 +27,12 @@ configurations {
 
 repositories {
     mavenCentral()
+}
+
+dependencyManagement {
+    imports {
+        mavenBom "org.springframework.modulith:spring-modulith-bom:${springModulithVersion}"
+    }
 }
 
 dependencies {
@@ -113,6 +123,13 @@ dependencies {
     // AWS S3 (for MinIO Object Storage)
     implementation 'software.amazon.awssdk:s3:2.21.29'
     implementation 'software.amazon.awssdk:apache-client:2.21.29'
+
+    // Modulith
+    implementation 'org.springframework.modulith:spring-modulith-starter-core'
+    implementation 'org.springframework.modulith:spring-modulith-starter-jpa'
+    implementation 'org.springframework.modulith:spring-modulith-events-jpa'
+    testImplementation 'org.springframework.modulith:spring-modulith-test'
+    testImplementation 'org.springframework.modulith:spring-modulith-docs'
 
     // ArchTurn
     testImplementation 'com.tngtech.archunit:archunit-junit5:1.2.1'

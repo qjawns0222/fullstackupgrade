@@ -1,6 +1,6 @@
 package com.example.demo
 
-import com.example.demo.repository.AuditLogRepository
+import com.example.demo.audit.AuditLogRepository
 import com.example.demo.repository.ResumeSearchRepository
 import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test

@@ -1,4 +1,4 @@
-package com.example.demo.document
+package com.example.demo.audit
 
 import java.time.LocalDateTime
 import org.springframework.data.annotation.Id

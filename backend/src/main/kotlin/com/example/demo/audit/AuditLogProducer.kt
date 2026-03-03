@@ -1,7 +1,6 @@
-package com.example.demo.service
+package com.example.demo.audit
 
 import com.example.demo.config.RabbitMqConfig
-import com.example.demo.dto.AuditLogMessage
 import org.slf4j.LoggerFactory
 import org.springframework.amqp.rabbit.core.RabbitTemplate
 import org.springframework.stereotype.Service
@@ -11,7 +10,8 @@ class AuditLogProducer(private val rabbitTemplate: RabbitTemplate) {
 
     private val logger = LoggerFactory.getLogger(AuditLogProducer::class.java)
 
-    fun sendAuditLog(message: AuditLogMessage) {
+    @org.springframework.modulith.events.ApplicationModuleListener
+    fun onAuditLogEvent(message: AuditLogMessage) {
         try {
             rabbitTemplate.convertAndSend(
                     RabbitMqConfig.AUDIT_EXCHANGE,

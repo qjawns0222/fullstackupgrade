@@ -1,65 +1,68 @@
-[Fullstack] AI 분석 결과 PDF 리포트 자동 생성 시스템 구축
+[Fullstack] 분산 환경을 위한 Bucket4j와 Redis 기반 Rate Limiting 구축 경험기
 
-AI 분석 결과를 단순히 화면으로만 보는 것이 아니라, 문서화하여 보관하고 싶은 요구사항이 생겼다. 시니어 개발자로서 이러한 '리포트 다운로드' 기능은 서비스의 완성도를 결정짓는 핵심 요소라고 생각한다. 이번 미션에서는 OpenPDF 라이브러리를 활용해 AI 분석 결과(OCR 텍스트 등)를 PDF로 정교하게 렌더링하고 다운로드할 수 있는 기능을 구현했다.
+서비스 트래픽이 꾸준히 늘어남에 따라 백엔드 애플리케이션의 스케일 아웃(Scale-out)을 고민하게 마련이다. 하지만 기존 코드 베이스를 점검하던 중 아주 치명적인 설계 결함을 발견했다. 바로 API 요청 횟수를 제한하는 Rate Limiter가 애플리케이션 메모리 내부(`ConcurrentHashMap`)에서 동작하고 있다는 점이었다.
 
-### 기술적 도전: PDF 렌더링 및 스트림 처리
+서버가 1대일 때는 전혀 문제가 되지 않지만, 만약 서버가 3대로 늘어난다면 각 서버가 독립적으로 한도를 계산하게 되어 실질적으로 사용자가 제한보다 3배 더 많은 요청을 보낼 수 있게 되는 데이터 정합성 깨짐 문제가 발생한다. 이런 인프라적 한계를 극복하기 위해 기존 인메모리 캐시를 버리고, 모든 서버가 상태를 공유하는 **Redis 기반 분산 Rate Limiting** 시스템으로 마이그레이션(Migration)을 진행했다.
 
-단순히 텍스트를 파일로 저장하는 것이 아니라, 문서의 구조(제목, 메타데이터, 결과 본문)를 잡고 폰트와 레이아웃을 설정하는 것이 핵심이었다. 또한, 서버 메모리 효율을 위해 `ByteArrayOutputStream`을 활용해 결과물을 생성하고, 이를 클라이언트로 신속하게 스트리밍하는 구조를 채택했다.
+### 왜 Bucket4j + Redis 인가?
+단일 노드에서는 Caffeine 등 단순 캐시가 성능에 유리하지만, 클러스터링 기반에서는 이를 중앙화해야 한다. 기존 프로젝트에서 이미 Spring Data Redis(+ Lettuce) 환경을 갖추고 있었으므로 부하 분산과 동시성 문제 처리가 검증된 `bucket4j-redis` 라이브러리를 채택했다.
 
-### 핵심 구현 코드 스니펫 (무조건 포함)
+### 구현 상세 (핵심 코드 스니펫)
 
-#### 1. PdfService: 도큐먼트 생성 로직
-이 서비스는 `AnalysisRequest` 엔티티를 받아 OpenPDF를 통해 문서를 빌드한다.
+기존에는 객체를 맵에 담기만 하면 끝이었지만, 이번에는 Lettuce 기반의 `ProxyManager`를 Bean으로 등록해 분산 저장소가 버킷 트랜잭션을 처리하도록 만들었다.
+
+#### 1. RedisBucketConfig 설정
+Spring Boot가 제공하는 `LettuceConnectionFactory`의 네이티브 클라이언트를 어댑터로 감싸 `LettuceBasedProxyManager`를 Bean으로 정의한다. 이제 이 ProxyManager만이 글로벌 Rate Limit을 주관하게 된다.
 
 ```kotlin
-@Service
-class PdfService {
-    fun generateAnalysisReport(request: AnalysisRequest): ByteArray {
-        val out = ByteArrayOutputStream()
-        val document = Document()
-        PdfWriter.getInstance(document, out)
-        
-        document.open()
-        
-        val titleFont = Font(Font.HELVETICA, 18f, Font.BOLD)
-        val normalFont = Font(Font.HELVETICA, 12f, Font.NORMAL)
+package com.example.demo.config
 
-        document.add(Paragraph("AI Analysis Report", titleFont))
-        document.add(Paragraph("Filename: ${request.originalFileName}", normalFont))
-        document.add(Paragraph("Analysis Result:", Font(Font.HELVETICA, 14f, Font.BOLD)))
-        document.add(Paragraph(request.result ?: "No result available.", normalFont))
-        
-        document.close()
-        return out.toByteArray()
+import io.github.bucket4j.distributed.proxy.ProxyManager
+import io.github.bucket4j.redis.lettuce.cas.LettuceBasedProxyManager
+import io.lettuce.core.RedisClient
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Configuration
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory
+
+@Configuration
+class RedisBucketConfig {
+    @Bean
+    fun proxyManager(lettuceConnectionFactory: LettuceConnectionFactory): ProxyManager<ByteArray> {
+        val client = lettuceConnectionFactory.nativeClient as RedisClient
+        return LettuceBasedProxyManager.builderFor(client).build()
     }
 }
 ```
 
-#### 2. AnalysisController: 다운로드 엔드포인트
-생성된 PDF를 클라이언트에 전달하기 위해 `ResponseEntity`와 적절한 `HTTP Headers`를 설정했다.
+#### 2. RateLimiterService 리팩토링
+가장 큰 변화는 `ConcurrentHashMap`이 사라지고 `ProxyManager`가 주입되어 동작한다는 것이다. 이제 클라이언트 IP 기반 Bucket은 Redis에서 조회(또는 생성)되며, 동시에 발생하는 수천 건의 요청도 원자적(Atomic)으로 검사된다. 게다가 deprecate된 기존 API들을 현대적인 `Bandwidth.builder()` 방식으로 교체해 경고 메시지도 모두 정리했다.
 
 ```kotlin
-@GetMapping("/{id}/export")
-fun exportReport(@PathVariable id: Long): ResponseEntity<ByteArray> {
-    val request = repository.findById(id).orElseThrow { RuntimeException("Request not found") }
-    val pdf = pdfService.generateAnalysisReport(request)
-    
-    val headers = HttpHeaders()
-    headers.add("Content-Disposition", "attachment; filename=analysis_report_${id}.pdf")
-    
-    return ResponseEntity.ok()
-            .headers(headers)
-            .contentType(MediaType.APPLICATION_PDF)
-            .body(pdf)
+package com.example.demo.service
+
+import io.github.bucket4j.Bandwidth
+import io.github.bucket4j.Bucket
+import io.github.bucket4j.distributed.proxy.ProxyManager
+import java.nio.charset.StandardCharsets
+import java.time.Duration
+import org.springframework.stereotype.Service
+
+@Service
+class RateLimiterService(private val proxyManager: ProxyManager<ByteArray>) {
+
+    fun resolveBucket(key: String): Bucket {
+        val bytes = key.toByteArray(StandardCharsets.UTF_8)
+        return proxyManager.builder().build(bytes) {
+            // 1분당 최대 20개의 요청만 허용 (글로벌 제한 적용)
+            val limit = Bandwidth.builder()
+                .capacity(20)
+                .refillGreedy(20, Duration.ofMinutes(1))
+                .build()
+            io.github.bucket4j.BucketConfiguration.builder().addLimit(limit).build()
+        }
+    }
 }
 ```
 
-### 프론트엔드 연동
-
-사용자 경험을 위해 분석이 완료된 상태에서만 'PDF 리포트 다운로드' 버튼이 활성화되도록 구현했다. `fetch`를 통해 받은 블롭(Blob) 데이터를 브라우저에서 파일로 자동 다운로드하는 로직을 React 컴포넌트에 통합했다.
-
-### 개인적인 생각
-
-단순한 데이터 조회를 넘어 문서 형태의 결과물을 제공함으로써, 서비스의 신뢰도가 한 단계 격상되었다고 본다. 특히 Tess4J를 통한 OCR 기능과 연계되어, "이미지를 업로드하면 그 안의 글자를 추출해 정식 PDF 리포트로 만들어주는" 일관된 사용자 흐름을 완성했다는 점이 고무적이다.
-
-앞으로는 PDF 내에 그래프나 분석 통계를 추가해 더욱 풍성한 리포트를 만들 수 있도록 확장할 예정이다.
+### 마치며
+애플리케이션 코드는 종종 "돌아가기만 하면 된다"는 착각에 빠지게 만든다. 단일 서버에서 테스트하던 코드가 분산 아키텍처 위로 올라갔을 때 마주할 수 있는 전형적인 트래픽 한계(bottleneck)와 정합성 모순을 해결한 가치 있는 경험이었다. Mock 객체를 통해 JUnit 5 테스트도 완벽히 통과하도록 수정했으며, 이제 마음 놓고 서버를 증설(Scale-out)할 수 있게 되었다.

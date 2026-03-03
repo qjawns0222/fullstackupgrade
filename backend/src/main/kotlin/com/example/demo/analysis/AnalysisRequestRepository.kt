@@ -1,6 +1,5 @@
-package com.example.demo.repository
+package com.example.demo.analysis
 
-import com.example.demo.entity.AnalysisRequest
 import org.springframework.data.jpa.repository.JpaRepository
 
 interface AnalysisRequestRepository : JpaRepository<AnalysisRequest, Long>

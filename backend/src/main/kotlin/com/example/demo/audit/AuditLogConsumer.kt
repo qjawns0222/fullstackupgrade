@@ -1,9 +1,6 @@
-package com.example.demo.service
+package com.example.demo.audit
 
 import com.example.demo.config.RabbitMqConfig
-import com.example.demo.document.AuditLogDocument
-import com.example.demo.dto.AuditLogMessage
-import com.example.demo.repository.AuditLogRepository
 import org.slf4j.LoggerFactory
 import org.springframework.amqp.rabbit.annotation.RabbitListener
 import org.springframework.stereotype.Service

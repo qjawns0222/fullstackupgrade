@@ -1,8 +1,5 @@
-package com.example.demo.aop
+package com.example.demo.audit
 
-import com.example.demo.dto.AuditLogMessage
-import com.example.demo.repository.AuditLogRepository
-import com.example.demo.service.AuditLogProducer
 import java.time.LocalDateTime
 import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
@@ -52,7 +49,7 @@ class AuditLogRabbitMqTest {
                         timestamp = LocalDateTime.now()
                 )
 
-        auditLogProducer.sendAuditLog(message)
+        auditLogProducer.onAuditLogEvent(message)
 
         verify(auditLogRepository, timeout(5000).times(1)).save(any())
     }

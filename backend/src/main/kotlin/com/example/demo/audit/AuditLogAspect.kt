@@ -1,8 +1,5 @@
-package com.example.demo.aop
+package com.example.demo.audit
 
-import com.example.demo.annotation.AuditLog
-import com.example.demo.dto.AuditLogMessage
-import com.example.demo.service.AuditLogProducer
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.time.LocalDateTime
 import org.aspectj.lang.ProceedingJoinPoint
@@ -10,13 +7,14 @@ import org.aspectj.lang.annotation.Around
 import org.aspectj.lang.annotation.Aspect
 import org.aspectj.lang.reflect.MethodSignature
 import org.slf4j.LoggerFactory
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Component
 
 @Aspect
 @Component
 class AuditLogAspect(
-        private val auditLogProducer: AuditLogProducer,
+        private val eventPublisher: ApplicationEventPublisher,
         private val objectMapper: ObjectMapper
 ) {
 
@@ -63,7 +61,7 @@ class AuditLogAspect(
                                 errorMessage = errorMessage,
                                 timestamp = LocalDateTime.now()
                         )
-                auditLogProducer.sendAuditLog(logMessage)
+                eventPublisher.publishEvent(logMessage)
             } catch (e: Exception) {
                 logger.error("Failed to send audit log message to producer", e)
             }

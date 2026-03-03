@@ -1,6 +1,6 @@
 package com.example.demo.service
 
-import com.example.demo.annotation.AuditLog
+import com.example.demo.audit.AuditLog
 import com.example.demo.dto.JobApplicationRequest
 import com.example.demo.dto.JobApplicationResponse
 import com.example.demo.entity.JobApplication

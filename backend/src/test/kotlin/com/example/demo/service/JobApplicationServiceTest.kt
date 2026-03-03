@@ -22,60 +22,65 @@ import org.mockito.junit.jupiter.MockitoExtension
 @ExtendWith(MockitoExtension::class)
 class JobApplicationServiceTest {
 
-    @Mock private lateinit var jobApplicationRepository: JobApplicationRepository
+        @Mock private lateinit var jobApplicationRepository: JobApplicationRepository
 
-    @Mock private lateinit var userRepository: UserRepository
+        @Mock private lateinit var userRepository: UserRepository
+        @Mock
+        private lateinit var stateMachineFactory:
+                org.springframework.statemachine.config.StateMachineFactory<
+                        com.example.demo.state.JobApplicationState,
+                        com.example.demo.state.JobApplicationEvent>
 
-    @InjectMocks private lateinit var jobApplicationService: JobApplicationService
+        @InjectMocks private lateinit var jobApplicationService: JobApplicationService
 
-    @Test
-    fun `createApplication should save and return application`() {
-        // Given
-        val userId = 1L
+        @Test
+        fun `createApplication should save and return application`() {
+                // Given
+                val userId = 1L
 
-        // Mock User
-        val user =
-                User(
-                        id = userId,
-                        username = "testuser",
-                        password = "password",
-                        role = "USER",
-                        email = "test@example.com"
-                )
-
-        val request =
-                JobApplicationRequest(
-                        companyName = "Test Company",
-                        position = "Developer",
-                        status = JobApplicationStatus.APPLIED,
-                        appliedDate = LocalDate.now(),
-                        memo = "Test Memo"
-                )
-
-        // Mock returns
-        `when`(userRepository.findById(userId)).thenReturn(Optional.of(user))
-
-        val savedApplication =
-                JobApplication(
-                                companyName = request.companyName,
-                                position = request.position,
-                                status = request.status,
-                                appliedDate = request.appliedDate,
-                                memo = request.memo,
-                                user = user
+                // Mock User
+                val user =
+                        User(
+                                id = userId,
+                                username = "testuser",
+                                password = "password",
+                                role = "USER",
+                                email = "test@example.com"
                         )
-                        .apply { id = 100L }
 
-        `when`(jobApplicationRepository.save(any(JobApplication::class.java)))
-                .thenReturn(savedApplication)
+                val request =
+                        JobApplicationRequest(
+                                companyName = "Test Company",
+                                position = "Developer",
+                                status = JobApplicationStatus.APPLIED,
+                                appliedDate = LocalDate.now(),
+                                memo = "Test Memo"
+                        )
 
-        // When
-        val result = jobApplicationService.createApplication(userId, request)
+                // Mock returns
+                `when`(userRepository.findById(userId)).thenReturn(Optional.of(user))
 
-        // Then
-        assertNotNull(result)
-        assertEquals(request.companyName, result.companyName)
-        assertEquals(userId, result.userId)
-        verify(jobApplicationRepository).save(any(JobApplication::class.java))
-    }
+                val savedApplication =
+                        JobApplication(
+                                        companyName = request.companyName,
+                                        position = request.position,
+                                        status = request.status,
+                                        appliedDate = request.appliedDate,
+                                        memo = request.memo,
+                                        user = user
+                                )
+                                .apply { id = 100L }
+
+                `when`(jobApplicationRepository.save(any(JobApplication::class.java)))
+                        .thenReturn(savedApplication)
+
+                // When
+                val result = jobApplicationService.createApplication(userId, request)
+
+                // Then
+                assertNotNull(result)
+                assertEquals(request.companyName, result.companyName)
+                assertEquals(userId, result.userId)
+                verify(jobApplicationRepository).save(any(JobApplication::class.java))
+        }
 }

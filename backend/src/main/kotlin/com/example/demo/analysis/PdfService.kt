@@ -1,6 +1,5 @@
-package com.example.demo.service
+package com.example.demo.analysis
 
-import com.example.demo.entity.AnalysisRequest
 import com.lowagie.text.Document
 import com.lowagie.text.Font
 import com.lowagie.text.Paragraph

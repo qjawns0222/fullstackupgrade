@@ -1,6 +1,5 @@
-package com.example.demo.service
+package com.example.demo.analysis
 
-import com.example.demo.entity.AnalysisRequest
 import java.time.LocalDateTime
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test

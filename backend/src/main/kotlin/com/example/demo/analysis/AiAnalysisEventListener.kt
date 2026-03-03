@@ -1,22 +1,16 @@
-package com.example.demo.listener
+package com.example.demo.analysis
 
 import com.example.demo.entity.Resume
-import com.example.demo.event.AiAnalysisEvent
 import com.example.demo.event.ResumeSearchEvent
-import com.example.demo.repository.AnalysisRequestRepository
 import com.example.demo.repository.ResumeRepository
 import com.example.demo.repository.UserRepository
-import com.example.demo.service.OcrService
-import com.example.demo.service.S3Service
+import com.example.demo.shared.S3Service
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
 import org.springframework.context.ApplicationEventPublisher
-import org.springframework.context.event.EventListener
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.data.redis.listener.ChannelTopic
-import org.springframework.scheduling.annotation.Async
 import org.springframework.stereotype.Component
-import org.springframework.transaction.annotation.Transactional
 
 @Component
 class AiAnalysisEventListener(
@@ -33,9 +27,7 @@ class AiAnalysisEventListener(
 
     private val log = LoggerFactory.getLogger(AiAnalysisEventListener::class.java)
 
-    @Async
-    @EventListener
-    @Transactional
+    @org.springframework.modulith.events.ApplicationModuleListener
     fun handleAiAnalysis(event: AiAnalysisEvent) {
         val requestId = event.analysisRequestId
         log.info("Starting Async AI Analysis for Request ID: {}", requestId)

@@ -1,8 +1,5 @@
-package com.example.demo.aop
+package com.example.demo.audit
 
-import com.example.demo.annotation.AuditLog
-import com.example.demo.dto.AuditLogMessage
-import com.example.demo.service.AuditLogProducer
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.aspectj.lang.ProceedingJoinPoint
 import org.aspectj.lang.reflect.MethodSignature
@@ -14,6 +11,7 @@ import org.mockito.ArgumentMatchers
 import org.mockito.Mock
 import org.mockito.Mockito.*
 import org.mockito.junit.jupiter.MockitoExtension
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.security.core.Authentication
 import org.springframework.security.core.context.SecurityContext
 import org.springframework.security.core.context.SecurityContextHolder
@@ -21,7 +19,7 @@ import org.springframework.security.core.context.SecurityContextHolder
 @ExtendWith(MockitoExtension::class)
 class AuditLogAspectTest {
 
-    @Mock private lateinit var auditLogProducer: AuditLogProducer
+    @Mock private lateinit var eventPublisher: ApplicationEventPublisher
     @Mock private lateinit var objectMapper: ObjectMapper
     @Mock private lateinit var joinPoint: ProceedingJoinPoint
     @Mock private lateinit var signature: MethodSignature
@@ -32,7 +30,7 @@ class AuditLogAspectTest {
 
     @BeforeEach
     fun setUp() {
-        auditLogAspect = AuditLogAspect(auditLogProducer, objectMapper)
+        auditLogAspect = AuditLogAspect(eventPublisher, objectMapper)
         SecurityContextHolder.setContext(securityContext)
     }
 
@@ -61,8 +59,8 @@ class AuditLogAspectTest {
         assertEquals("Success Result", result)
         verify(joinPoint).proceed()
 
-        // Verify producer called
-        verify(auditLogProducer, times(1)).sendAuditLog(safeAny(AuditLogMessage::class.java))
+        // Verify event published
+        verify(eventPublisher, times(1)).publishEvent(safeAny(AuditLogMessage::class.java))
     }
 
     @Test
@@ -87,8 +85,8 @@ class AuditLogAspectTest {
                     capturedMessage[0] = invocation.getArgument(0)
                     null
                 }
-                .`when`(auditLogProducer)
-                .sendAuditLog(safeAny(AuditLogMessage::class.java))
+                .`when`(eventPublisher)
+                .publishEvent(safeAny(AuditLogMessage::class.java))
 
         // When & Then
         assertThrows(RuntimeException::class.java) {

@@ -1,6 +1,5 @@
-package com.example.demo.repository
+package com.example.demo.audit
 
-import com.example.demo.document.AuditLogDocument
 import org.springframework.data.elasticsearch.repository.ElasticsearchRepository
 import org.springframework.stereotype.Repository
 

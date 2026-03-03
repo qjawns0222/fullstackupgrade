@@ -1,4 +1,4 @@
-package com.example.demo.annotation
+package com.example.demo.audit
 
 import java.lang.annotation.ElementType
 import java.lang.annotation.Retention

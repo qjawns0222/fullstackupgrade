@@ -1,10 +1,6 @@
-package com.example.demo.controller
+package com.example.demo.analysis
 
-import com.example.demo.entity.AnalysisRequest
-import com.example.demo.event.AiAnalysisEvent
-import com.example.demo.repository.AnalysisRequestRepository
-import com.example.demo.service.PdfService
-import com.example.demo.service.S3Service
+import com.example.demo.shared.S3Service
 import java.security.Principal
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.http.ResponseEntity
@@ -23,7 +19,7 @@ class AnalysisController(
     @GetMapping("/{id}/export")
     fun exportReport(@PathVariable id: Long): ResponseEntity<ByteArray> {
         val request = repository.findById(id).orElseThrow { RuntimeException("Request not found") }
-        if (request.status != com.example.demo.entity.AnalysisRequest.Status.COMPLETED) {
+        if (request.status != AnalysisRequest.Status.COMPLETED) {
             throw RuntimeException("Report not ready")
         }
 
