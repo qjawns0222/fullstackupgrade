@@ -1,5 +1,6 @@
 package com.example.demo.analysis
 
+import com.example.demo.annotation.FeatureToggle
 import com.example.demo.shared.S3Service
 import java.security.Principal
 import org.springframework.context.ApplicationEventPublisher
@@ -35,6 +36,7 @@ class AnalysisController(
     }
 
     @PostMapping
+    @FeatureToggle(name = "ai-analysis")
     fun uploadFile(
             @RequestParam("file") file: MultipartFile,
             principal: Principal?
