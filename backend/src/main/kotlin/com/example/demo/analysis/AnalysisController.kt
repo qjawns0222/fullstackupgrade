@@ -1,6 +1,7 @@
 package com.example.demo.analysis
 
 import com.example.demo.annotation.FeatureToggle
+import com.example.demo.annotation.RateLimit
 import com.example.demo.shared.S3Service
 import java.security.Principal
 import org.springframework.context.ApplicationEventPublisher
@@ -37,6 +38,7 @@ class AnalysisController(
 
     @PostMapping
     @FeatureToggle(name = "ai-analysis")
+    @RateLimit(key = "ai-analysis-upload", capacity = 10, tokens = 10, seconds = 3600)
     fun uploadFile(
             @RequestParam("file") file: MultipartFile,
             principal: Principal?

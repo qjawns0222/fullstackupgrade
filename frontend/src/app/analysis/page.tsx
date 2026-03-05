@@ -78,10 +78,14 @@ export default function AnalysisPage() {
             const data = await res.json();
             setUploadId(data.id);
             // Status will be updated by polling
-        } catch (error) {
+        } catch (error: any) {
             console.error(error);
             setStatus("FAILED");
-            setResult("Upload failed. Please try again.");
+            if (error.status === 429) {
+                setResult("Too many requests. Please wait a moment before trying again.");
+            } else {
+                setResult("Upload failed. Please try again.");
+            }
         }
     };
 

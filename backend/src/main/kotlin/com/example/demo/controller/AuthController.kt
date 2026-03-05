@@ -1,5 +1,6 @@
 package com.example.demo.controller
 
+import com.example.demo.annotation.RateLimit
 import com.example.demo.dto.LoginRequest
 import com.example.demo.dto.TokenDto
 import com.example.demo.service.AuthService
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController
 class AuthController(private val authService: AuthService) {
 
     @PostMapping("/login")
+    @RateLimit(key = "auth-login", capacity = 5, tokens = 5, seconds = 60)
     fun login(@RequestBody loginRequest: LoginRequest): ResponseEntity<TokenDto> {
         return ResponseEntity.ok(authService.login(loginRequest))
     }
