@@ -1,46 +1,50 @@
-[Fullstack] Unleash를 이용한 동적 기능 활성화(Feature Toggle) 적용기
+[Fullstack] Bucket4j와 Redis를 이용한 분산 환경 Rate Limiting 구현하기
 
-최근 프로젝트가 커지면서 리소스를 많이 잡아먹는 특정 서비스들(예: AI 기반 OCR 분석)에 대한 제어권이 필요하다는 생각이 들었습니다. 배포를 새로 하지 않고도 런타임에 특정 기능을 죽이거나 살릴 수 있는 구조, 즉 'Feature Toggle'을 도입한 과정을 정리해봅니다.
+대규모 트래픽이 몰리는 서비스에서 특정 사용자나 IP의 무분별한 요청을 막는 것은 보안과 가용성 측면에서 필수적입니다. 특히 AI 분석과 같이 리소스를 많이 소모하는 API는 더욱 철저한 제어가 필요하죠.
 
-이번에 선택한 도구는 Unleash입니다. 단순한 if-else 처리가 아니라, 아키텍처 관점에서 어떻게 깔끔하게 녹여낼 수 있을지 고민하며 작업했습니다.
+이번 미션에서는 Bucket4j와 Redis를 결합하여, 여러 서버 인스턴스에서도 동일하게 적용되는 '분산 처리율 제한(Distributed Rate Limiting)' 기능을 도입했습니다.
 
-핵심 설계: AOP를 활용한 선언적 제어
-비즈니스 로직 곳곳에 'if(featureEnabled)' 같은 코드를 집어넣는 것은 시니어 개발자답지 않습니다. 저는 AOP를 활용하여 어노테이션 하나로 기능을 제어할 수 있는 구조를 잡았습니다.
+핵심 설계: 분산 환경에서의 상태 공유
+로컬 메모리를 사용하는 처리율 제한은 서버가 여러 대일 경우 한계가 있습니다. 저는 이를 해결하기 위해 Redis를 백엔드 저장소로 활용했습니다.
 
-1. FeatureToggle 어노테이션 정의
+1. @RateLimit 어노테이션 정의
 package com.example.demo.annotation
 
 @Target(AnnotationTarget.FUNCTION)
 @Retention(AnnotationRetention.RUNTIME)
-annotation class FeatureToggle(val name: String)
+annotation class RateLimit(
+    val key: String = "",
+    val capacity: Long = 10,
+    val tokens: Long = 10,
+    val seconds: Long = 60
+)
 
-2. Aspect를 이용한 공통 로직 처리
-매번 Unleash 클라이언트를 수동으로 호출하지 않고, Aspect에서 기능을 체크하도록 구현했습니다.
+2. Interceptor를 통한 공통 제어
+Spring MVC Interceptor를 사용하여 컨트롤러에 도달하기 전 토큰을 검증하도록 구현했습니다.
 
-@Aspect
 @Component
-class FeatureToggleAspect(private val unleash: Unleash) {
-    @Around("@annotation(featureToggle)")
-    fun checkFeature(joinPoint: ProceedingJoinPoint, featureToggle: FeatureToggle): Any? {
-        if (!unleash.isEnabled(featureToggle.name)) {
-            throw FeatureDisabledException(featureToggle.name)
+class RateLimitInterceptor(private val proxyManager: ProxyManager<ByteArray>) : HandlerInterceptor {
+    override fun preHandle(request: HttpServletRequest, response: HttpServletResponse, handler: Any): Boolean {
+        // ... 생략 ...
+        val bucket: Bucket = proxyManager.builder().build(key.toByteArray(), configuration)
+        if (bucket.tryConsume(1)) {
+            return true
+        } else {
+            throw RateLimitExceededException("Too many requests.")
         }
-        return joinPoint.proceed()
     }
 }
 
-기능 적용: AI 분석 업로드 차단
-이제 컨트롤러에서는 복잡한 로직 없이 어노테이션만 붙여주면 됩니다.
+실전 적용: 로그인 및 AI 분석 엔드포인트
+무차별 대입 공격(Brute Force)의 위험이 있는 로그인 API와 고비용의 AI 분석 업로드 API에 각각 최적화된 Rate Limit을 적용했습니다.
 
-@PostMapping
-@FeatureToggle(name = "ai-analysis")
-fun uploadFile(...) { ... }
+- 로그인: 1분당 5회 제한
+- AI 분석: 1시간당 10회 제한
 
-인프라적 결함 해결과 개인적인 의견
-기존에는 예상치 못한 트래픽이나 외부 API 장애 시 시스템 전체 부하를 막기 위해 수동으로 설정을 바꾸고 배포해야 했습니다. 하지만 이번 Feature Toggle 도입으로 운영 환경에서의 대응력이 한 단계 격상되었습니다.
+프론트엔드 사용자 경험(UX) 개선
+단순히 요청을 차단하는 데 그치지 않고, 프론트엔드(`AnalysisPage`)에서 429(Too Many Requests) 에러 발생 시 사용자에게 친절한 안내 메시지를 출력하도록 개선했습니다.
 
-특히 단순히 Boolean 체크를 넘어, Unleash가 제공하는 Gradual Rollout(단계적 배포)이나 UserID 기반 타겟팅을 활용할 수 있는 토대를 마련했다는 점에서 의미가 큽니다.
+자가 치유(Self-Healing) 과정
+구현 과정 중 Kotlin의 메서드 오버로딩 해결(Bucket4j의 build 메서드) 과정에서 컴파일 에러가 발생했으나, 런타임 분석과 명시적 타입 캐스팅을 통해 해결했습니다. 인프라성 기능일수록 환경에 따른 변수를 잡는 것이 중요하다는 것을 다시 한번 깨달았습니다.
 
-프론트엔드에서도 관리자 페이지를 통해 현재 기능들의 활성 상태를 모니터링할 수 있는 UI를 추가했습니다. 백엔드의 견고함과 프론트엔드의 가시성이 만났을 때 진정한 운영 품질이 확보된다고 생각합니다.
-
-테스트 코드 역시 Mockito를 활용해 Aspect의 동작을 100% 검증했습니다. 인프라성 기능일수록 테스트는 타협의 대상이 아닙니다.
+이번 구현을 통해 서비스의 안정성을 한 단계 높였으며, 앞으로도 더 견고한 아키텍처를 위해 고민하겠습니다.

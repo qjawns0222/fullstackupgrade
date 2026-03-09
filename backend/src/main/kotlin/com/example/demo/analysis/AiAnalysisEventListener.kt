@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.data.redis.listener.ChannelTopic
+import org.springframework.messaging.simp.SimpMessagingTemplate
 import org.springframework.stereotype.Component
 
 @Component
@@ -22,7 +23,8 @@ class AiAnalysisEventListener(
         private val objectMapper: ObjectMapper,
         private val eventPublisher: ApplicationEventPublisher,
         private val s3Service: S3Service,
-        private val ocrService: OcrService
+        private val ocrService: OcrService,
+        private val messagingTemplate: SimpMessagingTemplate
 ) {
 
     private val log = LoggerFactory.getLogger(AiAnalysisEventListener::class.java)
@@ -30,39 +32,38 @@ class AiAnalysisEventListener(
     @org.springframework.modulith.events.ApplicationModuleListener
     fun handleAiAnalysis(event: AiAnalysisEvent) {
         val requestId = event.analysisRequestId
+        val username = event.username
         log.info("Starting Async AI Analysis for Request ID: {}", requestId)
 
-        val request =
-                repository.findById(requestId).orElseThrow { RuntimeException("Request not found") }
-
-        request.startAnalysis()
-        repository.saveAndFlush(request) // Ensure status update is committed
-
         try {
+            val request =
+                    repository.findById(requestId).orElseThrow {
+                        RuntimeException("Analysis Request not found: $requestId")
+                    }
+
+            request.startAnalysis()
+            repository.saveAndFlush(request)
+
+            // Notify Start via WebSocket
+            sendWebSocketUpdate(username, requestId, "STARTED", "Analysis started")
+
             var analysisResult = "No file data to process"
 
-            // Download file from S3 if available
             if (request.fileKey != null) {
-                log.info("Downloading file from S3 with key: {}", request.fileKey)
+                sendWebSocketUpdate(username, requestId, "PROCESSING", "Downloading file from S3")
                 val fileData = s3Service.downloadFile(request.fileKey!!)
-                log.info("Successfully downloaded file of size: {} bytes", fileData.size)
 
-                // Perform OCR
-                log.info("Starting OCR processing...")
+                sendWebSocketUpdate(username, requestId, "PROCESSING", "Performing OCR analysis")
                 analysisResult = ocrService.doOcr(fileData)
-                log.info("OCR processing completed.")
-            } else {
-                log.warn("No fileKey found for Request ID: {}", requestId)
             }
 
             request.complete(analysisResult)
-            repository.saveAndFlush(request) // Save completed state
-            log.info("AI Analysis Completed for Request ID: {}", requestId)
+            repository.saveAndFlush(request)
 
-            // Create and Save Resume Entity
+            // Create Resume Entity
             val user =
-                    userRepository.findByUsername(event.username).orElseThrow {
-                        RuntimeException("User not found: ${event.username}")
+                    userRepository.findByUsername(username).orElseThrow {
+                        RuntimeException("User not found: $username")
                     }
 
             val resume =
@@ -72,26 +73,51 @@ class AiAnalysisEventListener(
                             user = user
                     )
             resumeRepository.save(resume)
-            log.info("Saved Resume Entity for User: {}", event.username)
-
-            // Publish ResumeSearchEvent with Resume ID
             eventPublisher.publishEvent(ResumeSearchEvent(resume.id!!))
 
-            // Publish to Redis
-            val message: MutableMap<String, String> = HashMap()
-            message["username"] = event.username
-            message["content"] = "Analysis Completed for Request ID: $requestId"
+            // Notify Completion via WebSocket
+            sendWebSocketUpdate(username, requestId, "COMPLETED", "Analysis completed successfully")
 
-            val jsonMessage = objectMapper.writeValueAsString(message)
-            redisTemplate.convertAndSend(topic.topic, jsonMessage)
-            log.info("Published notification to Redis for user: {}", event.username)
-        } catch (e: InterruptedException) {
-            log.error("Analysis interrupted", e)
-            request.fail("Analysis interrupted")
-            Thread.currentThread().interrupt()
+            // Legacy Redis Notification
+            val message: MutableMap<String, String> = HashMap()
+            message["username"] = username
+            message["content"] = "Analysis Completed for Request ID: $requestId"
+            redisTemplate.convertAndSend(topic.topic, objectMapper.writeValueAsString(message))
         } catch (e: Exception) {
-            log.error("Analysis failed", e)
-            request.fail("Error: " + e.message)
+            log.error("Analysis failed for Request ID: $requestId", e)
+
+            // Attempt to update the status in the database if possible
+            try {
+                repository.findById(requestId).ifPresent {
+                    it.fail("Error: " + e.message)
+                    repository.saveAndFlush(it)
+                }
+            } catch (inner: Exception) {
+                log.error("Failed to save failed state to DB", inner)
+            }
+
+            sendWebSocketUpdate(username, requestId, "FAILED", e.message ?: "Unknown error")
+        }
+    }
+
+    private fun sendWebSocketUpdate(
+            username: String,
+            requestId: Long,
+            status: String,
+            message: String
+    ) {
+        val payload =
+                mapOf(
+                        "requestId" to requestId,
+                        "status" to status,
+                        "message" to message,
+                        "timestamp" to System.currentTimeMillis()
+                )
+        try {
+            messagingTemplate.convertAndSendToUser(username, "/topic/analysis", payload)
+            log.info("Sent WebSocket update to user {}: {} - {}", username, status, message)
+        } catch (e: Exception) {
+            log.error("Failed to send WebSocket update", e)
         }
     }
 }

@@ -6,10 +6,10 @@ import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 
 @Service
-class OcrService(private val tesseract: ITesseract) {
+open class OcrService(private val tesseract: ITesseract) {
     private val log = LoggerFactory.getLogger(OcrService::class.java)
 
-    fun doOcr(data: ByteArray): String {
+    open fun doOcr(data: ByteArray): String {
         log.info("Starting OCR processing for file of size: {} bytes", data.size)
 
         // Tesseract usually works better with Files or BufferedImages
