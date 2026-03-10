@@ -1,5 +1,7 @@
 package com.example.demo.analysis
 
+import io.github.resilience4j.bulkhead.annotation.Bulkhead
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker
 import java.nio.file.Files
 import net.sourceforge.tess4j.ITesseract
 import org.slf4j.LoggerFactory
@@ -9,6 +11,8 @@ import org.springframework.stereotype.Service
 open class OcrService(private val tesseract: ITesseract) {
     private val log = LoggerFactory.getLogger(OcrService::class.java)
 
+    @Bulkhead(name = "ocrService")
+    @CircuitBreaker(name = "ocrService")
     open fun doOcr(data: ByteArray): String {
         log.info("Starting OCR processing for file of size: {} bytes", data.size)
 

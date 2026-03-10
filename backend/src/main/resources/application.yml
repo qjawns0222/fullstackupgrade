@@ -50,13 +50,46 @@ management:
   endpoints:
     web:
       exposure:
-        include: health, prometheus, metrics, circuitbreakers, flyway
+        include: health, prometheus, metrics, circuitbreakers, flyway, sessions
   health:
     circuitbreakers:
+      enabled: true
+    ratemiters:
       enabled: true
   metrics:
     tags:
       application: ${spring.application.name}
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      s3Service:
+        registerHealthIndicator: true
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        permittedNumberOfCallsInHalfOpenState: 3
+        waitDurationInOpenState: 5s
+        failureRateThreshold: 50
+        eventConsumerBufferSize: 10
+      ocrService:
+        registerHealthIndicator: true
+        slidingWindowSize: 5
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+
+  retry:
+    instances:
+      s3Service:
+        maxAttempts: 3
+        waitDuration: 1s
+        enableExponentialBackoff: true
+        exponentialBackoffMultiplier: 2
+
+  bulkhead:
+    instances:
+      ocrService:
+        maxConcurrentCalls: 3
+        maxWaitDuration: 2s
 
 aws:
   s3:

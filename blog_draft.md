@@ -1,50 +1,56 @@
-[Fullstack] Bucket4j와 Redis를 이용한 분산 환경 Rate Limiting 구현하기
+# [Fullstack] AI 분석 상태 업데이트: Polling에서 WebSocket(STOMP)으로 전환하기
 
-대규모 트래픽이 몰리는 서비스에서 특정 사용자나 IP의 무분별한 요청을 막는 것은 보안과 가용성 측면에서 필수적입니다. 특히 AI 분석과 같이 리소스를 많이 소모하는 API는 더욱 철저한 제어가 필요하죠.
+AI 분석(OCR 및 이력서 데이터 추출)과 같은 비동기 작업의 진행 상태를 사용자에게 어떻게 실시간으로 전달할 수 있을까요? 
+가장 쉬운 방법은 **Polling**이지만, 이는 서버 자원 낭비와 지연 시간(Latency)이라는 한계를 가지고 있습니다. 
 
-이번 미션에서는 Bucket4j와 Redis를 결합하여, 여러 서버 인스턴스에서도 동일하게 적용되는 '분산 처리율 제한(Distributed Rate Limiting)' 기능을 도입했습니다.
+이번에는 Spring Boot의 **STOMP WebSocket**을 도입하여 Polling을 제거하고, 진정한 실시간 이벤트를 구현하며 사용자 경험(UX)을 극대화한 과정을 공유합니다.
 
-핵심 설계: 분산 환경에서의 상태 공유
-로컬 메모리를 사용하는 처리율 제한은 서버가 여러 대일 경우 한계가 있습니다. 저는 이를 해결하기 위해 Redis를 백엔드 저장소로 활용했습니다.
+## 1. 전/후 아키텍처 비교
 
-1. @RateLimit 어노테이션 정의
-package com.example.demo.annotation
+### Before (Polling)
+- **Frontend**: 1초마다 `/api/analysis/{id}` 호출 (GET)
+- **Backend**: DB에서 상태 조회 후 응답
+- **문제점**: 1초의 지연 발생, 불필요한 트래픽 및 DB 커넥션 소모
 
-@Target(AnnotationTarget.FUNCTION)
-@Retention(AnnotationRetention.RUNTIME)
-annotation class RateLimit(
-    val key: String = "",
-    val capacity: Long = 10,
-    val tokens: Long = 10,
-    val seconds: Long = 60
-)
+### After (WebSocket STOMP)
+- **Backend**: 분석 상태 조각(STARTED, PROCESSING, COMPLETED)이 발생할 때마다 전용 Topic으로 Push
+- **Frontend**: WebSocket 연결 후 Topic 구독. 메시지 수신 즉시 UI 업데이트
+- **장점**: Zero-Latency, 서버 부하 감소, 부드러운 애니메이션 구현 가능
 
-2. Interceptor를 통한 공통 제어
-Spring MVC Interceptor를 사용하여 컨트롤러에 도달하기 전 토큰을 검증하도록 구현했습니다.
+## 2. 주요 구현 사항 (Backend)
 
-@Component
-class RateLimitInterceptor(private val proxyManager: ProxyManager<ByteArray>) : HandlerInterceptor {
-    override fun preHandle(request: HttpServletRequest, response: HttpServletResponse, handler: Any): Boolean {
-        // ... 생략 ...
-        val bucket: Bucket = proxyManager.builder().build(key.toByteArray(), configuration)
-        if (bucket.tryConsume(1)) {
-            return true
-        } else {
-            throw RateLimitExceededException("Too many requests.")
-        }
-    }
+### WebSocket 설정 (Config)
+`WebSocketMessageBrokerConfigurer`를 통해 `/ws` 엔드포인트를 개방하고 애플리케이션 목적지를 설정합니다.
+
+### 이벤트 리스너 (EventListener)
+`SimpMessagingTemplate`을 주입받아 특정 사용자에게만 상태 변화를 전송합니다.
+
+```kotlin
+private fun sendWebSocketUpdate(username: String, requestId: Long, status: String, message: String) {
+    val payload = mapOf(
+        "requestId" to requestId,
+        "status" to status,
+        "message" to message,
+        "timestamp" to System.currentTimeMillis()
+    )
+    messagingTemplate.convertAndSendToUser(username, "/topic/analysis", payload)
 }
+```
 
-실전 적용: 로그인 및 AI 분석 엔드포인트
-무차별 대입 공격(Brute Force)의 위험이 있는 로그인 API와 고비용의 AI 분석 업로드 API에 각각 최적화된 Rate Limit을 적용했습니다.
+## 3. 프리미엄 UI 및 UX 디자인 (Frontend)
 
-- 로그인: 1분당 5회 제한
-- AI 분석: 1시간당 10회 제한
+Next.js 환경에서 `@stomp/stompjs`와 `sockjs-client`를 사용하여 실시간 데이터를 수신합니다.
 
-프론트엔드 사용자 경험(UX) 개선
-단순히 요청을 차단하는 데 그치지 않고, 프론트엔드(`AnalysisPage`)에서 429(Too Many Requests) 에러 발생 시 사용자에게 친절한 안내 메시지를 출력하도록 개선했습니다.
+- **디자인 컨셉**: Glassmorphism 스타일과 부드러운 프로그레스 애니메이션 적용.
+- **실시간 로그**: "파일 다운로드 중...", "OCR 분석 수행 중..." 등 백엔드에서 전송하는 세부 메시지를 실시간으로 출력하여 사용자의 체감 대기 시간을 줄였습니다.
 
-자가 치유(Self-Healing) 과정
-구현 과정 중 Kotlin의 메서드 오버로딩 해결(Bucket4j의 build 메서드) 과정에서 컴파일 에러가 발생했으나, 런타임 분석과 명시적 타입 캐스팅을 통해 해결했습니다. 인프라성 기능일수록 환경에 따른 변수를 잡는 것이 중요하다는 것을 다시 한번 깨달았습니다.
+## 4. 셀프 힐링 (Self-Healing) & 테스트
 
-이번 구현을 통해 서비스의 안정성을 한 단계 높였으며, 앞으로도 더 견고한 아키텍처를 위해 고민하겠습니다.
+Kotlin 특유의 **Strict Null-Safety**와 Mockito의 충돌 문제를 `any() ?: fallback` 패턴으로 해결하고, `OcrService`를 `open` 클래스로 전환하여 100% 유닛 테스트 통과를 달성했습니다.
+
+## 결론
+
+단순히 기능을 만드는 것을 넘어, 시스템의 효율성과 사용자의 '와우 포인트'를 위해 WebSockets을 도입했습니다. 이제 분석 작업이 시작되자마자 사용자는 즉각적인 반응을 확인할 수 있습니다.
+
+---
+**Tag**: #Spring #Kotlin #Nextjs #WebSocket #STOMP #Fullstack #Developer #AIBlog

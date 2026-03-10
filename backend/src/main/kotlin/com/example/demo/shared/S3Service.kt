@@ -1,5 +1,7 @@
 package com.example.demo.shared
 
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker
+import io.github.resilience4j.retry.annotation.Retry
 import java.util.UUID
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
@@ -11,13 +13,15 @@ import software.amazon.awssdk.services.s3.model.GetObjectRequest
 import software.amazon.awssdk.services.s3.model.PutObjectRequest
 
 @Service
-class S3Service(
+open class S3Service(
         private val s3Client: S3Client,
         @Value("\${aws.s3.bucket}") private val bucket: String
 ) {
         private val log = LoggerFactory.getLogger(S3Service::class.java)
 
-        fun uploadFile(file: MultipartFile): String {
+        @CircuitBreaker(name = "s3Service")
+        @Retry(name = "s3Service")
+        open fun uploadFile(file: MultipartFile): String {
                 val originalName = file.originalFilename ?: "unknown"
                 val extension = originalName.substringAfterLast(".", "")
                 val fileKey =
@@ -40,7 +44,9 @@ class S3Service(
                 return fileKey
         }
 
-        fun downloadFile(fileKey: String): ByteArray {
+        @CircuitBreaker(name = "s3Service")
+        @Retry(name = "s3Service")
+        open fun downloadFile(fileKey: String): ByteArray {
                 val getObjectRequest =
                         GetObjectRequest.builder().bucket(bucket).key(fileKey).build()
 
