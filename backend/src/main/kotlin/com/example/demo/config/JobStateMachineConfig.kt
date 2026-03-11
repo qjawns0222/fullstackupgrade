@@ -51,30 +51,44 @@ class JobStateMachineConfig :
                 .source(JobApplicationState.APPLIED)
                 .target(JobApplicationState.INTERVIEW)
                 .event(JobApplicationEvent.START_INTERVIEW)
+                .action(logTransitionAction())
                 .and()
                 .withExternal()
                 .source(JobApplicationState.INTERVIEW)
                 .target(JobApplicationState.OFFER_RECEIVED)
                 .event(JobApplicationEvent.RECEIVE_OFFER)
+                .action(logTransitionAction())
                 .and()
                 .withExternal()
                 .source(JobApplicationState.OFFER_RECEIVED)
                 .target(JobApplicationState.PASSED)
                 .event(JobApplicationEvent.PASS)
+                .action(logTransitionAction())
                 .and()
                 .withExternal()
                 .source(JobApplicationState.APPLIED)
                 .target(JobApplicationState.REJECTED)
                 .event(JobApplicationEvent.REJECT)
+                .action(logTransitionAction())
                 .and()
                 .withExternal()
                 .source(JobApplicationState.INTERVIEW)
                 .target(JobApplicationState.REJECTED)
                 .event(JobApplicationEvent.REJECT)
+                .action(logTransitionAction())
                 .and()
                 .withExternal()
                 .source(JobApplicationState.OFFER_RECEIVED)
                 .target(JobApplicationState.REJECTED)
                 .event(JobApplicationEvent.REJECT)
+                .action(logTransitionAction())
+    }
+
+    private fun logTransitionAction() = org.springframework.statemachine.action.Action<JobApplicationState, JobApplicationEvent> { context ->
+        val from = context.source?.id
+        val to = context.target?.id
+        val event = context.event
+        log.info("Business Action Triggered: [Event: $event] $from -> $to")
+        // In a real scenario, we could call AuditLogProducer here
     }
 }

@@ -119,6 +119,7 @@ dependencies {
 
     // State Machine
     implementation 'org.springframework.statemachine:spring-statemachine-starter:4.0.0'
+    implementation 'org.springframework.statemachine:spring-statemachine-data-redis:4.0.0'
 
     // AWS S3 (for MinIO Object Storage)
     implementation 'software.amazon.awssdk:s3:2.21.29'

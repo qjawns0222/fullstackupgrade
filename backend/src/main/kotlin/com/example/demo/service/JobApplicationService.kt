@@ -12,6 +12,7 @@ import java.time.LocalDateTime
 import org.springframework.messaging.support.MessageBuilder
 import org.springframework.statemachine.config.StateMachineFactory
 import org.springframework.statemachine.support.DefaultStateMachineContext
+import org.springframework.statemachine.persist.StateMachinePersister
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import reactor.core.publisher.Mono
@@ -21,7 +22,8 @@ class JobApplicationService(
         private val jobApplicationRepository: JobApplicationRepository,
         private val userRepository: UserRepository,
         private val stateMachineFactory:
-                StateMachineFactory<JobApplicationState, JobApplicationEvent>
+                StateMachineFactory<JobApplicationState, JobApplicationEvent>,
+        private val persister: StateMachinePersister<JobApplicationState, JobApplicationEvent, String>
 ) {
 
     @Transactional(readOnly = true)
@@ -118,36 +120,45 @@ class JobApplicationService(
             throw IllegalArgumentException("Unauthorized access")
         }
 
-        // 1. Create and reset State Machine to current state
+        // 1. Get State Machine from Factory
         val stateMachine = stateMachineFactory.getStateMachine(id.toString())
-        stateMachine.stopReactively().block()
 
-        stateMachine.stateMachineAccessor.doWithAllRegions { accessor ->
-            accessor.resetStateMachineReactively(
-                            DefaultStateMachineContext(
-                                    JobApplicationState.valueOf(application.status.name),
-                                    null,
-                                    null,
-                                    null
-                            )
-                    )
-                    .block()
+        // 2. Restore state from Persister (Redis)
+        persister.restore(stateMachine, id.toString())
+
+        // If newly created or not in Redis, reset to DB state as fallback
+        if (stateMachine.state == null) {
+            stateMachine.stopReactively().block()
+            stateMachine.stateMachineAccessor.doWithAllRegions { accessor ->
+                accessor.resetStateMachineReactively(
+                                DefaultStateMachineContext(
+                                        JobApplicationState.valueOf(application.status.name),
+                                        null,
+                                        null,
+                                        null
+                                )
+                        )
+                        .block()
+            }
+            stateMachine.startReactively().block()
         }
 
-        stateMachine.startReactively().block()
+        // 3. Send Event
+        stateMachine
+                .sendEvent(Mono.just(MessageBuilder.withPayload(event).build()))
+                .blockLast()
 
-        // 2. Send Event
-        val result =
-                stateMachine
-                        .sendEvent(Mono.just(MessageBuilder.withPayload(event).build()))
-                        .blockLast()
-
-        // 3. Update Entity State based on Machine State
+        // 4. Update Entity State based on Machine State
         val newState = stateMachine.state.id
         application.status = com.example.demo.entity.JobApplicationStatus.valueOf(newState.name)
         application.updatedAt = LocalDateTime.now()
 
-        return toResponse(jobApplicationRepository.save(application))
+        val savedApplication = jobApplicationRepository.save(application)
+
+        // 5. Persist final state back to Redis
+        persister.persist(stateMachine, id.toString())
+
+        return toResponse(savedApplication)
     }
 
     private fun toResponse(application: JobApplication): JobApplicationResponse {

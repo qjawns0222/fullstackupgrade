@@ -1,8 +1,10 @@
 'use client';
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/axios';
 import { JobApplicationResponse } from '@/types/job-application';
+import { Briefcase, ArrowRight } from 'lucide-react';
+import KanbanBoard from '@/components/applications/KanbanBoard';
 
 export default function ApplicationsPage() {
     const queryClient = useQueryClient();
@@ -15,21 +17,9 @@ export default function ApplicationsPage() {
         },
     });
 
-    const mutation = useMutation({
-        mutationFn: async ({ id, event }: { id: number; event: string }) => {
-            const res = await api.post(`/applications/${id}/status?event=${event}`);
-            return res.data;
-        },
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['applications'] });
-        },
-    });
-
     const handleExport = async () => {
         try {
-            const response = await api.get('/applications/export', {
-                responseType: 'blob',
-            });
+            const response = await api.get('/applications/export', { responseType: 'blob' });
             const url = window.URL.createObjectURL(new Blob([response.data]));
             const link = document.createElement('a');
             link.href = url;
@@ -43,85 +33,63 @@ export default function ApplicationsPage() {
         }
     };
 
-    if (isLoading) return <div className="p-8 text-center text-white">Loading applications...</div>;
+    if (isLoading) return (
+        <div className="min-h-screen bg-neutral-950 flex items-center justify-center">
+            <div className="flex flex-col items-center gap-4">
+                <div className="w-12 h-12 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin" />
+                <p className="text-neutral-400 font-bold animate-pulse">Initializing Kanban...</p>
+            </div>
+        </div>
+    );
+
     if (isError) return <div className="p-8 text-center text-red-500">Failed to load applications.</div>;
 
     return (
-        <div className="min-h-screen bg-gray-900 text-white p-8">
-            <div className="max-w-6xl mx-auto">
-                <div className="flex justify-between items-center mb-6">
-                    <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
-                        Job Applications
-                    </h1>
-                    <button
-                        onClick={handleExport}
-                        className="px-6 py-2 bg-green-600 hover:bg-green-700 rounded-lg font-semibold transition-colors shadow-lg hover:shadow-green-500/30 flex items-center gap-2"
-                    >
-                        <span>Export to Excel</span>
-                    </button>
-                </div>
+        <div className="min-h-screen bg-neutral-950 text-neutral-100 p-8 font-[family-name:var(--font-geist-sans)]">
+            <div className="max-w-[1600px] mx-auto space-y-10">
+                {/* Dashboard-style Header */}
+                <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+                    <div className="space-y-2">
+                        <div className="flex items-center gap-3">
+                            <div className="bg-blue-600/20 p-2 rounded-xl border border-blue-500/30 shadow-[0_0_15px_rgba(59,130,246,0.2)]">
+                                <Briefcase className="w-6 h-6 text-blue-500" />
+                            </div>
+                            <h1 className="text-3xl font-black tracking-tighter italic uppercase text-white shadow-sm">
+                                Career Pipeline
+                            </h1>
+                        </div>
+                        <p className="text-neutral-500 text-sm font-medium">Manage your job application lifecycle with persistent state management.</p>
+                    </div>
 
-                <div className="bg-gray-800 rounded-xl shadow-xl overflow-hidden border border-gray-700">
-                    <table className="w-full text-left border-collapse">
-                        <thead>
-                            <tr className="bg-gray-700/50">
-                                <th className="p-4 font-semibold text-gray-300">Company</th>
-                                <th className="p-4 font-semibold text-gray-300">Position</th>
-                                <th className="p-4 font-semibold text-gray-300">Status</th>
-                                <th className="p-4 font-semibold text-gray-300">Applied Date</th>
-                                <th className="p-4 font-semibold text-gray-300">Memo</th>
-                                <th className="p-4 font-semibold text-gray-300">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-700">
-                            {applications?.map((app) => (
-                                <tr key={app.id} className="hover:bg-gray-700 transition-colors">
-                                    <td className="p-4 font-medium text-white">{app.companyName}</td>
-                                    <td className="p-4 text-gray-300">{app.position}</td>
-                                    <td className="p-4">
-                                        <span
-                                            className={`px-3 py-1 rounded-full text-xs font-medium ${app.status === 'APPLIED' ? 'bg-blue-500/20 text-blue-400' :
-                                                app.status === 'INTERVIEW' ? 'bg-yellow-500/20 text-yellow-400' :
-                                                    app.status === 'REJECTED' ? 'bg-red-500/20 text-red-400' :
-                                                        app.status === 'PASSED' ? 'bg-green-500/20 text-green-400' :
-                                                            'bg-purple-500/20 text-purple-400'
-                                                }`}
-                                        >
-                                            {app.status}
-                                        </span>
-                                    </td>
-                                    <td className="p-4 text-gray-400">{app.appliedDate}</td>
-                                    <td className="p-4 text-gray-500 italic truncate max-w-xs">{app.memo}</td>
-                                    <td className="p-4">
-                                        <div className="flex gap-2">
-                                            {app.status === 'APPLIED' && (
-                                                <>
-                                                    <button onClick={() => mutation.mutate({ id: app.id, event: 'START_INTERVIEW' })} className="px-2 py-1 bg-blue-600 hover:bg-blue-700 rounded text-xs">Interview</button>
-                                                    <button onClick={() => mutation.mutate({ id: app.id, event: 'REJECT' })} className="px-2 py-1 bg-red-600 hover:bg-red-700 rounded text-xs">Reject</button>
-                                                </>
-                                            )}
-                                            {app.status === 'INTERVIEW' && (
-                                                <>
-                                                    <button onClick={() => mutation.mutate({ id: app.id, event: 'RECEIVE_OFFER' })} className="px-2 py-1 bg-purple-600 hover:bg-purple-700 rounded text-xs">Offer</button>
-                                                    <button onClick={() => mutation.mutate({ id: app.id, event: 'REJECT' })} className="px-2 py-1 bg-red-600 hover:bg-red-700 rounded text-xs">Reject</button>
-                                                </>
-                                            )}
-                                            {app.status === 'OFFER_RECEIVED' && (
-                                                <>
-                                                    <button onClick={() => mutation.mutate({ id: app.id, event: 'PASS' })} className="px-2 py-1 bg-green-600 hover:bg-green-700 rounded text-xs">Accept</button>
-                                                    <button onClick={() => mutation.mutate({ id: app.id, event: 'REJECT' })} className="px-2 py-1 bg-red-600 hover:bg-red-700 rounded text-xs">Refuse</button>
-                                                </>
-                                            )}
-                                        </div>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                    {applications?.length === 0 && (
-                        <div className="p-8 text-center text-gray-500">No applications found. Start applying!</div>
-                    )}
-                </div>
+                    <div className="flex items-center gap-4">
+                        <div className="hidden md:flex flex-col items-end px-4 py-2 border-r border-neutral-800">
+                            <span className="text-[10px] text-neutral-500 font-bold uppercase">Total Opportunities</span>
+                            <span className="text-xl font-black text-white">{applications?.length || 0}</span>
+                        </div>
+                        <button
+                            onClick={handleExport}
+                            className="group relative px-6 py-2.5 bg-neutral-900 border border-neutral-800 hover:border-emerald-500/50 rounded-xl font-bold transition-all overflow-hidden"
+                        >
+                            <div className="absolute inset-0 bg-emerald-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                            <span className="relative flex items-center gap-2 text-neutral-300 group-hover:text-emerald-400">
+                                <ArrowRight className="w-4 h-4" />
+                                Export Excel
+                            </span>
+                        </button>
+                    </div>
+                </header>
+
+                <main className="relative">
+                    <div className="absolute -inset-4 bg-gradient-to-b from-blue-500/5 to-transparent opacity-50 blur-3xl pointer-events-none" />
+                    <KanbanBoard applications={applications || []} />
+                </main>
+
+                {applications?.length === 0 && (
+                    <div className="py-20 text-center space-y-4 bg-neutral-900/50 border border-dashed border-neutral-800 rounded-3xl">
+                        <Briefcase className="w-12 h-12 text-neutral-700 mx-auto" />
+                        <p className="text-neutral-500 font-bold tracking-tight">Your pipeline is empty. Start your journey today.</p>
+                    </div>
+                )}
             </div>
         </div>
     );
