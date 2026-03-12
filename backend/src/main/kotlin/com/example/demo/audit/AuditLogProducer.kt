@@ -20,9 +20,8 @@ class AuditLogProducer(private val rabbitTemplate: RabbitTemplate) {
             )
             logger.info("Sent audit log to RabbitMQ: $message")
         } catch (e: Exception) {
-            logger.error("Failed to send audit log to RabbitMQ", e)
-            // Fallback mechanism could be implemented here (e.g., save to local file or DB
-            // directly)
+            logger.error("Failed to send audit log to RabbitMQ. Marking for retry via Modulith.", e)
+            throw e // Re-throw to trigger Modulith Event Publication Registry failure tracking
         }
     }
 }
