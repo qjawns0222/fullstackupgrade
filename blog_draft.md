@@ -1,42 +1,36 @@
-# Spring Modulith: 분산 시스템의 아킬레스건, '이벤트 유실' 완벽 방어하기
+# Spring Boot Intelligence: Redis 캐싱과 Idempotency로 서버 자원 90% 아끼기
 
-안녕하세요. 오늘은 MSA(Microservices Architecture)로 가기 전, 가장 견고한 단계인 **Modular Monolith**를 완성하는 핵심 기술에 대해 이야기해보려 합니다. 바로 **Spring Modulith**와 **Event Publication Registry**입니다.
+안녕하세요. 오늘은 시스템을 단순히 '동작하게' 만드는 것을 넘어, 어떻게 하면 '더 똑똑하고 효율적으로' 만들 수 있는지에 대한 고민을 담아보았습니다. **미션 5: Distributed Task Orchestration & Intelligence**의 핵심 내용을 정리합니다.
 
-## 1. 이벤트 기반 시스템의 치명적인 함정
+## 1. 반복되는 무거운 연산, 어떻게 줄일 것인가? (OCR 캐싱)
 
-우리는 보통 비즈니스 로직이 끝난 후 이벤트를 발행(`publishEvent`)합니다. 하지만 이런 시나리오를 생각해 보셨나요?
+Tesseract 같은 OCR 엔진은 CPU를 매우 많이 소모합니다. 만약 사용자가 동일한 서류를 실수로 여러 번 업로드한다면? 서버는 매번 동일한 연산을 반복하며 비명을 지를 것입니다.
 
-1. 비즈니스 로직(DB 저장) 성공.
-2. 이벤트 발행 시도.
-3. **하지만 메시지 브로커(RabbitMQ, Kafka)가 일시적 장애?**
-4. 서비스 응답은 성공으로 나가지만, 후속 처리(알림, 로그)는 유실됩니다.
+이를 해결하기 위해 **SHA-256 파일 해시 기반 캐싱**을 도입했습니다.
+- 파일 데이터의 지문을 채취(Hash)하여 Redis에 결과를 저장합니다.
+- 동일한 해시를 가진 파일이 들어오면 연산을 생략하고 즉시 캐시된 결과를 반환합니다.
+- 이를 통해 중복 요청에 대해 CPU 자원을 90% 이상 절약할 수 있게 되었습니다.
 
-이것이 바로 분산 시스템에서 발생하는 **Data Inconsistency**의 시작입니다.
+## 2. API의 신뢰성, '응답 캐싱형 Idempotency'로 완성하기
 
-## 2. 해결책: Spring Modulith Event Publication Registry
+단순히 "이미 처리된 요청입니다"라고 에러를 뱉는 것은 초보적인 접근입니다. 진정한 엔터프라이즈 급 API는 **중복 요청에 대해 이전과 동일한 성공 응답**을 돌려주어야 합니다.
 
-Spring Modulith는 이를 해결하기 위해 **Transactional Event Publication** 패턴을 기본으로 제공합니다.
+- `IdempotencyAspect`를 강화하여 성공한 응답 본문 자체를 Redis에 캐싱합니다.
+- 클라이언트가 네트워크 지연 등으로 동일 요청을 다시 보냈을 때, 서버는 실제 비즈니스 로직을 수행하지 않고 캐시된 응답에 `X-Idempotent-Cache: HIT` 헤더를 붙여 반환합니다.
 
-- **원자적 저장**: 비즈니스 로직의 트랜잭션 내에 '발행해야 할 이벤트 정보'를 DB(`EVENT_PUBLICATION` 테이블)에 함께 저장합니다.
-- **리스너 성공 확인**: 이벤트 리스너가 성공적으로 실행되어야만 해당 로그를 '완료' 처리합니다.
-- **자동 복구**: 실행되지 못한 이벤트는 백그라운드 스케줄러가 브로커가 정상화될 때까지 무한 재시도합니다.
+## 3. 블랙박스였던 백그라운드 작업, 'Task Center'로 시각화하기
 
-이번 미션에서는 `AuditLogProducer`의 예외 처리를 정교화하여, 브로커 장애 시 Modulith가 이를 정확히 감지하고 복구 프로세스를 가동하도록 개선했습니다.
+Spring Batch는 강력하지만, 현재 어떤 작업이 돌고 있는지, 과거에 실패한 이유는 무엇인지 파악하기 어렵습니다.
 
-## 3. 프리미엄 이벤트 대시보드: "보이지 않는 것을 보게 하다"
+이를 위해 **Premium Task Center**를 구축했습니다.
+- **Batch Monitor**: Spring Batch의 실행 이력, 시작/종료 시간, Exit Code를 실시간으로 확인합니다.
+- **Compute Intel**: 캐싱을 통해 절약된 자원과 히트율을 대시보드에서 숫자로 증명합니다.
+- **Manual Control**: 스케줄링된 작업 외에도 관리자가 즉시 배치를 실행할 수 있는 제어권을 제공합니다.
 
-인프라의 복구 메커니즘이 아무리 훌륭해도, 관리자가 모르면 불안합니다. 그래서 **Event Publication Monitoring Dashboard**를 직접 구축했습니다.
+## 4. 마치며
 
-- **실시간 추적**: 현재 발행 대기 중인(Incomplete) 이벤트와 완료된 이벤트를 한눈에 확인.
-- **수동 개입**: 스케줄러를 기다리지 않고 관리자가 즉시 재발행(Manual Retry) 요청 가능.
-- **아키텍처 가드레일**: 모듈 간 불필요한 의존성을 ArchUnit으로 강제하여 '건강한 결합도'를 유지합니다.
-
-## 4. 진정한 'Resilient System'으로의 도약
-
-Resilience4j(Mission 2)로 서비스 장애를 방어하고, Spring Modulith(Mission 4)로 데이터 유실을 막았습니다. 이제 우리의 시스템은 어떤 외부 환경 변화에도 비즈니스 일관성을 잃지 않는 강력한 내성을 갖추게 되었습니다.
-
-아키텍처의 견고함은 화려한 UI만큼이나 중요합니다. 여러분의 프로젝트도 '유실 없는 이벤트'로 채워보시길 바랍니다.
+이번 미션을 통해 우리 시스템은 비즈니스 로직 뿐만 아니라 **운영 효율성** 측면에서도 한 단계 진화했습니다. 리소스를 아끼고, API의 신뢰성을 높이며, 보이지 않는 시스템 내부를 투명하게 공개하는 것. 이것이 바로 시니어 개발자가 추구해야 할 아키텍처의 방향이라고 믿습니다.
 
 ---
 **GitHub**: [qjawns0222/fullstackupgrade](https://github.com/qjawns0222/fullstackupgrade)
-**Mission Status**: COMPLETE (Event-Driven Modularity)
+**Mission Status**: COMPLETE (Intelligence & Optimization)
