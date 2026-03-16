@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat:*)",
+      "Bash(xargs cat:*)",
+      "Bash(.gradlew.bat test --tests DeadlockRetryAspectTest)",
+      "Bash(./gradlew test:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

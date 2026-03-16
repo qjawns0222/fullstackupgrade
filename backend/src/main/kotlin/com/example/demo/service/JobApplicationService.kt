@@ -1,5 +1,6 @@
 package com.example.demo.service
 
+import com.example.demo.annotation.RetryOnDeadlock
 import com.example.demo.audit.AuditLog
 import com.example.demo.dto.JobApplicationRequest
 import com.example.demo.dto.JobApplicationResponse
@@ -44,6 +45,7 @@ class JobApplicationService(
     }
 
     @Transactional
+    @RetryOnDeadlock
     @AuditLog(action = "CREATE_APPLICATION", description = "User created a new job application")
     fun createApplication(userId: Long, request: JobApplicationRequest): JobApplicationResponse {
         val user =
@@ -65,6 +67,7 @@ class JobApplicationService(
     }
 
     @Transactional
+    @RetryOnDeadlock
     @AuditLog(action = "UPDATE_APPLICATION", description = "User updated a job application")
     fun updateApplication(
             id: Long,
@@ -106,6 +109,7 @@ class JobApplicationService(
     }
 
     @Transactional
+    @RetryOnDeadlock
     @AuditLog(
             action = "CHANGE_STATUS",
             description = "User triggered a state transition for a job application"
