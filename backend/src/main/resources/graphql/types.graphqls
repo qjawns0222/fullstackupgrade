@@ -1,0 +1,73 @@
+type User {
+    id: ID!
+    username: String!
+    email: String
+    role: String!
+    mfaEnabled: Boolean!
+    applications: [JobApplication!]!
+    resumes: [Resume!]!
+}
+
+type JobApplication {
+    id: ID!
+    companyName: String!
+    position: String!
+    status: JobApplicationStatus!
+    appliedDate: Date!
+    memo: String
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    user: User!
+}
+
+type Resume {
+    id: ID!
+    originalFileName: String!
+    content: String
+    createdAt: DateTime!
+    user: User!
+}
+
+type TrendStats {
+    id: ID!
+    techStack: String!
+    count: Long!
+    recordedAt: DateTime!
+}
+
+type DashboardData {
+    userId: String!
+    data: String!
+    timestamp: String!
+}
+
+enum JobApplicationStatus {
+    APPLIED
+    INTERVIEW
+    REJECTED
+    PASSED
+    OFFER_RECEIVED
+}
+
+enum JobApplicationEvent {
+    START_INTERVIEW
+    REJECT
+    RECEIVE_OFFER
+    PASS
+}
+
+input CreateApplicationInput {
+    companyName: String!
+    position: String!
+    status: JobApplicationStatus!
+    appliedDate: Date!
+    memo: String
+}
+
+input UpdateApplicationInput {
+    companyName: String!
+    position: String!
+    status: JobApplicationStatus!
+    appliedDate: Date!
+    memo: String
+}

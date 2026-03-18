@@ -15,6 +15,10 @@ class OcrServiceTest {
 
     @Mock lateinit var tesseract: ITesseract
 
+    @Mock lateinit var redisTemplate: org.springframework.data.redis.core.StringRedisTemplate
+
+    @Mock lateinit var valueOperations: org.springframework.data.redis.core.ValueOperations<String, String>
+
     @InjectMocks lateinit var ocrService: OcrService
 
     @Test
@@ -23,10 +27,8 @@ class OcrServiceTest {
         val mockData = "dummy-image-content".toByteArray()
         val expectedText = "Extracted Text"
 
-        // We use any(File::class.java) but since we can't easily capture the temp file
-        // in this simple mock, we just trust the logic for now.
-        // Actually, Tess4J doesn't have a simple any File matcher without ArgumentMatchers.
-        // For simplicity in this environment, let's mock it carefully.
+        `when`(redisTemplate.opsForValue()).thenReturn(valueOperations)
+        `when`(valueOperations.get(org.mockito.ArgumentMatchers.anyString())).thenReturn(null)
         `when`(tesseract.doOCR(org.mockito.ArgumentMatchers.any(File::class.java)))
                 .thenReturn(expectedText)
 

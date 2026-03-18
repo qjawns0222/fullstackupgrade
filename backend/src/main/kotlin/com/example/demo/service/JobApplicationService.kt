@@ -165,6 +165,14 @@ class JobApplicationService(
         return toResponse(savedApplication)
     }
 
+    @Transactional(readOnly = true)
+    fun getApplicationEntity(id: Long, userId: Long): JobApplication {
+        val application = jobApplicationRepository.findById(id)
+            .orElseThrow { IllegalArgumentException("Application not found") }
+        if (application.user.id != userId) throw IllegalArgumentException("Unauthorized access")
+        return application
+    }
+
     private fun toResponse(application: JobApplication): JobApplicationResponse {
         return JobApplicationResponse(
                 id = application.id!!,

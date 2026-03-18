@@ -4,6 +4,14 @@ spring:
     always-use-message-format: true
   application:
     name: demo
+  graphql:
+    graphiql:
+      enabled: true
+      path: /graphiql
+    path: /graphql
+    schema:
+      locations: classpath:graphql/
+      file-extensions: .graphqls
   
 
   data:

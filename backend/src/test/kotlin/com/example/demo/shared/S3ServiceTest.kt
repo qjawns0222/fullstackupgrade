@@ -24,8 +24,12 @@ class S3ServiceTest {
     @Mock
     lateinit var s3Client: S3Client
 
-    @InjectMocks
-    lateinit var s3Service: S3Service
+    private lateinit var s3Service: S3Service
+
+    @org.junit.jupiter.api.BeforeEach
+    fun setUp() {
+        s3Service = S3Service(s3Client, "test-bucket")
+    }
 
     @Test
     fun `should upload file successfully`() {

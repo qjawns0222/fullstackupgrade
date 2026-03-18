@@ -1,0 +1,19 @@
+scalar Date
+scalar DateTime
+scalar Long
+
+type Query {
+    me: User
+    myApplications: [JobApplication!]!
+    application(id: ID!): JobApplication
+    trends: [TrendStats!]!
+    resumes: [Resume!]!
+    dashboard: DashboardData
+}
+
+type Mutation {
+    createApplication(input: CreateApplicationInput!): JobApplication!
+    updateApplication(id: ID!, input: UpdateApplicationInput!): JobApplication!
+    deleteApplication(id: ID!): Boolean!
+    changeApplicationStatus(id: ID!, event: JobApplicationEvent!): JobApplication!
+}

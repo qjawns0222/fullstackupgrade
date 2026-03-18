@@ -52,8 +52,8 @@ class IdempotencyAspectTest {
         val annotation = mock(Idempotent::class.java)
         `when`(annotation.keyHeader).thenReturn("Idempotency-Key")
         `when`(request.getHeader("Idempotency-Key")).thenReturn("test-key")
-
-        `when`(redisTemplate.hasKey("idempotency:test-key")).thenReturn(true)
+        `when`(redisTemplate.opsForValue()).thenReturn(valueOperations)
+        `when`(valueOperations.get("idempotency:test-key")).thenReturn("PROCESSING")
 
         assertThrows(IdempotencyException::class.java) {
             aspect.handleIdempotency(joinPoint, annotation)
@@ -71,8 +71,8 @@ class IdempotencyAspectTest {
         `when`(annotation.timeUnit).thenReturn(TimeUnit.SECONDS)
 
         `when`(request.getHeader("Idempotency-Key")).thenReturn("unique-key")
-        `when`(redisTemplate.hasKey("idempotency:unique-key")).thenReturn(false)
         `when`(redisTemplate.opsForValue()).thenReturn(valueOperations)
+        `when`(valueOperations.get("idempotency:unique-key")).thenReturn(null)
 
         aspect.handleIdempotency(joinPoint, annotation)
 

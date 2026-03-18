@@ -31,6 +31,13 @@ class JobApplicationServiceTest {
                         com.example.demo.state.JobApplicationState,
                         com.example.demo.state.JobApplicationEvent>
 
+        @Mock
+        private lateinit var persister:
+                org.springframework.statemachine.persist.StateMachinePersister<
+                        com.example.demo.state.JobApplicationState,
+                        com.example.demo.state.JobApplicationEvent,
+                        String>
+
         @InjectMocks private lateinit var jobApplicationService: JobApplicationService
 
         @Test
