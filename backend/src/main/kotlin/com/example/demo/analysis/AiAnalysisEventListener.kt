@@ -7,6 +7,7 @@ import com.example.demo.repository.UserRepository
 import com.example.demo.shared.S3Service
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.data.redis.listener.ChannelTopic
@@ -19,7 +20,7 @@ class AiAnalysisEventListener(
         private val resumeRepository: ResumeRepository,
         private val userRepository: UserRepository,
         private val redisTemplate: StringRedisTemplate,
-        private val topic: ChannelTopic,
+        @Qualifier("notificationTopic") private val topic: ChannelTopic,
         private val objectMapper: ObjectMapper,
         private val eventPublisher: ApplicationEventPublisher,
         private val s3Service: S3Service,

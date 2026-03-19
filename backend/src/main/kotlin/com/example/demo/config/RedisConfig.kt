@@ -9,57 +9,28 @@ import org.springframework.data.redis.listener.RedisMessageListenerContainer
 import org.springframework.data.redis.listener.adapter.MessageListenerAdapter
 
 @Configuration
-@org.springframework.cache.annotation.EnableCaching
 class RedisConfig {
 
-    @Bean
-    fun topic(): ChannelTopic {
+    @Bean("notificationTopic")
+    fun notificationTopic(): ChannelTopic {
         return ChannelTopic("notification-topic")
     }
 
-    @Bean
-    fun messageListener(subscriber: RedisSubscriber): MessageListenerAdapter {
+    @Bean("notificationMessageListener")
+    fun notificationMessageListener(subscriber: RedisSubscriber): MessageListenerAdapter {
         return MessageListenerAdapter(subscriber)
     }
 
-    @Bean
-    fun redisMessageListener(
+    @Bean("notificationMessageListenerContainer")
+    fun notificationMessageListenerContainer(
             connectionFactory: RedisConnectionFactory,
-            listenerAdapter: MessageListenerAdapter,
-            topic: ChannelTopic
+            notificationMessageListener: MessageListenerAdapter,
+            notificationTopic: ChannelTopic
     ): RedisMessageListenerContainer {
         val container = RedisMessageListenerContainer()
         container.setConnectionFactory(connectionFactory)
-        container.addMessageListener(listenerAdapter, topic)
+        container.addMessageListener(notificationMessageListener, notificationTopic)
         return container
     }
 
-    @Bean
-    @org.springframework.context.annotation.Primary
-    fun cacheManager(
-            connectionFactory: RedisConnectionFactory
-    ): org.springframework.data.redis.cache.RedisCacheManager {
-        val cacheConfig =
-                org.springframework.data.redis.cache.RedisCacheConfiguration.defaultCacheConfig()
-                        .entryTtl(java.time.Duration.ofSeconds(60)) // Default TTL 60 seconds
-                        .disableCachingNullValues()
-                        .serializeKeysWith(
-                                org.springframework.data.redis.serializer.RedisSerializationContext
-                                        .SerializationPair.fromSerializer(
-                                        org.springframework.data.redis.serializer
-                                                .StringRedisSerializer()
-                                )
-                        )
-                        .serializeValuesWith(
-                                org.springframework.data.redis.serializer.RedisSerializationContext
-                                        .SerializationPair.fromSerializer(
-                                        org.springframework.data.redis.serializer
-                                                .GenericJackson2JsonRedisSerializer()
-                                )
-                        )
-
-        return org.springframework.data.redis.cache.RedisCacheManager.builder(connectionFactory)
-                .cacheDefaults(cacheConfig)
-                .build()
-    }
 }

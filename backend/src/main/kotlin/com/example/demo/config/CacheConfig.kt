@@ -21,7 +21,12 @@ class CacheConfig {
                 .recordStats()
     }
 
-    @Bean
+    /**
+     * Standalone Caffeine CacheManager kept as a secondary/fallback bean.
+     * The primary CacheManager is [TwoLevelCacheConfig.twoLevelCacheManager] which
+     * combines this L1 strategy with Redis L2 and cluster-wide invalidation.
+     */
+    @Bean("caffeineCacheManager")
     fun caffeineCacheManager(caffeine: Caffeine<Any, Any>): CacheManager {
         val cacheManager = CaffeineCacheManager()
         cacheManager.setCaffeine(caffeine)

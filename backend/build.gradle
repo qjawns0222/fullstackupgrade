@@ -148,6 +148,9 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-graphql'
     implementation 'com.graphql-java:graphql-java-extended-scalars:21.0'
     testImplementation 'org.springframework.graphql:spring-graphql-test'
+
+    // Two-Level Cache: Redisson Near Cache (L1 JVM-local + L2 Redis with pub/sub invalidation)
+    implementation 'org.redisson:redisson-spring-boot-starter:3.25.2'
 }
 
 tasks.named('test') {

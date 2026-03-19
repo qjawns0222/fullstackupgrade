@@ -113,6 +113,18 @@ logging:
   pattern:
     level: "%5p [${spring.application.name:},%X{traceId:-},%X{spanId:-}]"
 
+cache:
+  two-level:
+    l1-max-size: 200
+    l1-ttl-seconds: 30
+    l2-ttl-seconds: 300
+    invalidation-topic: cache:invalidation
+    cache-names:
+      - dashboard
+      - jobApplications
+      - resumeList
+      - trendStats
+
 org:
   jobrunr:
     background-job-server:
