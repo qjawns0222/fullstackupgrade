@@ -125,6 +125,12 @@ cache:
       - resumeList
       - trendStats
 
+query:
+  monitor:
+    enabled: true
+    slow-query-threshold-ms: 300
+    n1-threshold-count: 5
+
 org:
   jobrunr:
     background-job-server:

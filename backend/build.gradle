@@ -151,6 +151,9 @@ dependencies {
 
     // Two-Level Cache: Redisson Near Cache (L1 JVM-local + L2 Redis with pub/sub invalidation)
     implementation 'org.redisson:redisson-spring-boot-starter:3.25.2'
+
+    // datasource-proxy: Slow Query Detection + N+1 Alerting
+    implementation 'net.ttddyy:datasource-proxy:1.10'
 }
 
 tasks.named('test') {
