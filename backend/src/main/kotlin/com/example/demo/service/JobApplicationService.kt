@@ -9,6 +9,8 @@ import com.example.demo.repository.JobApplicationRepository
 import com.example.demo.repository.UserRepository
 import com.example.demo.state.JobApplicationEvent
 import com.example.demo.state.JobApplicationState
+import com.example.demo.webhook.WebhookDeliveryService
+import com.example.demo.webhook.WebhookEvent
 import java.time.LocalDateTime
 import org.springframework.messaging.support.MessageBuilder
 import org.springframework.statemachine.config.StateMachineFactory
@@ -24,7 +26,8 @@ class JobApplicationService(
         private val userRepository: UserRepository,
         private val stateMachineFactory:
                 StateMachineFactory<JobApplicationState, JobApplicationEvent>,
-        private val persister: StateMachinePersister<JobApplicationState, JobApplicationEvent, String>
+        private val persister: StateMachinePersister<JobApplicationState, JobApplicationEvent, String>,
+        private val webhookDeliveryService: WebhookDeliveryService
 ) {
 
     @Transactional(readOnly = true)
@@ -63,7 +66,20 @@ class JobApplicationService(
                         user = user
                 )
 
-        return toResponse(jobApplicationRepository.save(application))
+        val saved = jobApplicationRepository.save(application)
+        webhookDeliveryService.dispatch(
+            WebhookEvent(
+                eventType = "APPLICATION_CREATED",
+                payload = mapOf(
+                    "applicationId" to saved.id,
+                    "companyName" to saved.companyName,
+                    "position" to saved.position,
+                    "status" to saved.status.name
+                ),
+                userId = userId
+            )
+        )
+        return toResponse(saved)
     }
 
     @Transactional
@@ -161,6 +177,20 @@ class JobApplicationService(
 
         // 5. Persist final state back to Redis
         persister.persist(stateMachine, id.toString())
+
+        // 6. Fire webhook for status change
+        webhookDeliveryService.dispatch(
+            WebhookEvent(
+                eventType = "APPLICATION_STATUS_CHANGED",
+                payload = mapOf(
+                    "applicationId" to savedApplication.id,
+                    "companyName" to savedApplication.companyName,
+                    "newStatus" to newState.name,
+                    "event" to event.name
+                ),
+                userId = userId
+            )
+        )
 
         return toResponse(savedApplication)
     }

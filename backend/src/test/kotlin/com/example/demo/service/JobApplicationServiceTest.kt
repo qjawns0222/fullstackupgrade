@@ -6,6 +6,8 @@ import com.example.demo.entity.JobApplicationStatus
 import com.example.demo.entity.User
 import com.example.demo.repository.JobApplicationRepository
 import com.example.demo.repository.UserRepository
+import com.example.demo.webhook.WebhookDeliveryService
+import com.example.demo.webhook.WebhookEvent
 import java.time.LocalDate
 import java.util.Optional
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -37,6 +39,8 @@ class JobApplicationServiceTest {
                         com.example.demo.state.JobApplicationState,
                         com.example.demo.state.JobApplicationEvent,
                         String>
+
+        @Mock private lateinit var webhookDeliveryService: WebhookDeliveryService
 
         @InjectMocks private lateinit var jobApplicationService: JobApplicationService
 
