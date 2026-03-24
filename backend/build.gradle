@@ -158,6 +158,9 @@ dependencies {
     // Webhook Delivery: OkHttp3 for outbound signed HTTP callbacks
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
+
+    // Structured JSON Logging: Logstash Logback Encoder for ELK-compatible log output
+    implementation 'net.logstash.logback:logstash-logback-encoder:7.4'
 }
 
 tasks.named('test') {
