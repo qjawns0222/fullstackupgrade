@@ -1,5 +1,6 @@
 package com.example.demo.controller
 
+import com.example.demo.annotation.ValidateJsonSchema
 import com.example.demo.dto.JobApplicationRequest
 import com.example.demo.dto.JobApplicationResponse
 import com.example.demo.repository.UserRepository
@@ -65,6 +66,7 @@ class JobApplicationController(
     }
 
     @PostMapping
+    @ValidateJsonSchema(schemaPath = "schemas/job-application.json")
     fun createApplication(
             @RequestBody request: JobApplicationRequest,
             principal: Principal
@@ -75,6 +77,7 @@ class JobApplicationController(
     }
 
     @PutMapping("/{id}")
+    @ValidateJsonSchema(schemaPath = "schemas/job-application.json")
     fun updateApplication(
             @PathVariable id: Long,
             @RequestBody request: JobApplicationRequest,

@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "JobApplicationRequest",
+  "type": "object",
+  "required": ["companyName", "position", "status", "appliedDate"],
+  "properties": {
+    "companyName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "Company name"
+    },
+    "position": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "Job position"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["APPLIED", "INTERVIEW", "REJECTED", "PASSED", "OFFER_RECEIVED"],
+      "description": "Application status"
+    },
+    "appliedDate": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "description": "Date applied in YYYY-MM-DD format"
+    },
+    "memo": {
+      "type": ["string", "null"],
+      "maxLength": 1000,
+      "description": "Optional memo"
+    }
+  },
+  "additionalProperties": false,
+  "if": {
+    "properties": {
+      "status": { "const": "INTERVIEW" }
+    },
+    "required": ["status"]
+  },
+  "then": {
+    "properties": {
+      "memo": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Interview memo is required when status is INTERVIEW"
+      }
+    },
+    "required": ["memo"]
+  }
+}

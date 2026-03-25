@@ -1,6 +1,7 @@
 package com.example.demo.exception
 
 import com.example.demo.dto.ErrorResponse
+import com.example.demo.validation.SchemaValidationException
 import org.slf4j.LoggerFactory
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.ExceptionHandler
@@ -34,6 +35,22 @@ class GlobalExceptionHandler {
                         detail = e.message ?: errorCode.message
                 )
         return ResponseEntity(response, errorCode.status)
+    }
+
+    /** JSON Schema Validation Exception */
+    @ExceptionHandler(SchemaValidationException::class)
+    protected fun handleSchemaValidationException(
+        e: SchemaValidationException
+    ): ResponseEntity<Map<String, Any>> {
+        log.warn("Schema validation failed [schema={}]", e.schemaPath)
+        return ResponseEntity
+            .badRequest()
+            .body(mapOf(
+                "code" to "SCHEMA_VALIDATION_FAILED",
+                "message" to "Request body does not conform to API schema",
+                "schema" to e.schemaPath,
+                "violations" to e.violations
+            ))
     }
 
     /** Generic Exception */
