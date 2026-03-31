@@ -32,4 +32,18 @@ class AuthController(private val authService: AuthService) {
                 }
         return ResponseEntity.ok(authService.reissue(token))
     }
+
+    @PostMapping("/logout")
+    fun logout(
+        @RequestHeader("Authorization") authorization: String,
+        @RequestHeader("X-Refresh-Token", required = false) refreshToken: String?
+    ): ResponseEntity<Map<String, String>> {
+        val accessToken = if (authorization.startsWith("Bearer ")) {
+            authorization.substring(7)
+        } else {
+            authorization
+        }
+        authService.logout(accessToken, refreshToken)
+        return ResponseEntity.ok(mapOf("message" to "로그아웃 되었습니다."))
+    }
 }

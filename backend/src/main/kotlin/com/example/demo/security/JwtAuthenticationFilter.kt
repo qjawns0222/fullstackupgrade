@@ -3,31 +3,41 @@ package com.example.demo.security
 import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
+import org.slf4j.LoggerFactory
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.util.StringUtils
 import org.springframework.web.filter.OncePerRequestFilter
 
-class JwtAuthenticationFilter(private val jwtTokenProvider: JwtTokenProvider) :
-        OncePerRequestFilter() {
+class JwtAuthenticationFilter(
+    private val jwtTokenProvider: JwtTokenProvider,
+    private val tokenBlacklistService: TokenBlacklistService
+) : OncePerRequestFilter() {
+
+    private val log = LoggerFactory.getLogger(javaClass)
 
     override fun doFilterInternal(
-            request: HttpServletRequest,
-            response: HttpServletResponse,
-            filterChain: FilterChain
+        request: HttpServletRequest,
+        response: HttpServletResponse,
+        filterChain: FilterChain
     ) {
         val token = resolveToken(request)
         val requestUri = request.requestURI
 
         if (token != null) {
-            if (jwtTokenProvider.validateToken(token)) {
-                val authentication = jwtTokenProvider.getAuthentication(token)
-                SecurityContextHolder.getContext().authentication = authentication
-                // println("Security Context set for user: ${authentication.name} at $requestUri")
-            } else {
-                println("Invalid Token at $requestUri: $token")
+            when {
+                tokenBlacklistService.isBlacklisted(token) -> {
+                    log.warn("Rejected blacklisted JWT at {}", requestUri)
+                    response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Token has been revoked")
+                    return
+                }
+                jwtTokenProvider.validateToken(token) -> {
+                    val authentication = jwtTokenProvider.getAuthentication(token)
+                    SecurityContextHolder.getContext().authentication = authentication
+                }
+                else -> {
+                    log.debug("Invalid Token at {}", requestUri)
+                }
             }
-        } else {
-            // println("No Token found at $requestUri")
         }
         filterChain.doFilter(request, response)
     }

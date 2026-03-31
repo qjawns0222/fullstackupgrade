@@ -11,7 +11,6 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
-import org.mockito.ArgumentCaptor
 import org.mockito.Mock
 import org.mockito.Mockito.*
 import org.mockito.junit.jupiter.MockitoExtension
@@ -71,12 +70,14 @@ class WebhookDeliveryServiceTest {
         `when`(endpointRepository.findActiveByEventType("APPLICATION_CREATED"))
             .thenReturn(listOf(endpoint))
 
-        val logCaptor = ArgumentCaptor.forClass(WebhookDeliveryLog::class.java)
-        `when`(deliveryLogRepository.save(logCaptor.capture())).thenAnswer { logCaptor.value }
+        // Use thenAnswer with saved reference to avoid ArgumentCaptor NPE with Kotlin non-null types
+        var savedLog: WebhookDeliveryLog? = null
+        `when`(deliveryLogRepository.save(any(WebhookDeliveryLog::class.java))).thenAnswer { inv ->
+            (inv.arguments[0] as WebhookDeliveryLog).also { savedLog = it }
+        }
 
         service.dispatch(WebhookEvent("APPLICATION_CREATED", mapOf("id" to 1L), 1L))
 
-        // Wait for async-like blocking call
         val request = server.takeRequest()
         assertEquals("POST", request.method)
         assertNotNull(request.getHeader("X-Webhook-Signature"))
@@ -86,18 +87,17 @@ class WebhookDeliveryServiceTest {
     @Test
     fun `dispatch marks log as FAILED on 500 response and retries`() {
         val endpoint = makeEndpoint(server.url("/webhook").toString())
-        // Return 500 for all MAX_RETRIES attempts
         repeat(3) { server.enqueue(MockResponse().setResponseCode(500).setBody("Error")) }
 
         `when`(endpointRepository.findActiveByEventType("APPLICATION_STATUS_CHANGED"))
             .thenReturn(listOf(endpoint))
 
-        val logCaptor = ArgumentCaptor.forClass(WebhookDeliveryLog::class.java)
-        `when`(deliveryLogRepository.save(logCaptor.capture())).thenAnswer { logCaptor.value }
+        `when`(deliveryLogRepository.save(any(WebhookDeliveryLog::class.java))).thenAnswer { inv ->
+            inv.arguments[0] as WebhookDeliveryLog
+        }
 
         service.dispatch(WebhookEvent("APPLICATION_STATUS_CHANGED", mapOf("id" to 1L), 1L))
 
-        // Should have made 3 requests (MAX_RETRIES)
         assertEquals(3, server.requestCount)
     }
 
@@ -111,17 +111,18 @@ class WebhookDeliveryServiceTest {
             active = true
         )
 
-        val captor = ArgumentCaptor.forClass(WebhookEndpoint::class.java)
-        `when`(endpointRepository.save(captor.capture())).thenAnswer {
-            captor.value.also { it.id = 99L }
+        var savedEndpoint: WebhookEndpoint? = null
+        `when`(endpointRepository.save(any(WebhookEndpoint::class.java))).thenAnswer { inv ->
+            (inv.arguments[0] as WebhookEndpoint).also { it.id = 99L; savedEndpoint = it }
         }
 
-        val result = service.registerEndpoint(user.id!!, request, user)
+        service.registerEndpoint(user.id!!, request, user)
 
-        assertEquals("https://example.com/hook", captor.value.targetUrl)
-        assertEquals("mysecret", captor.value.secret)
-        assertEquals("APPLICATION_CREATED,APPLICATION_STATUS_CHANGED", captor.value.eventTypes)
-        assertTrue(captor.value.active)
+        assertNotNull(savedEndpoint)
+        assertEquals("https://example.com/hook", savedEndpoint!!.targetUrl)
+        assertEquals("mysecret", savedEndpoint!!.secret)
+        assertEquals("APPLICATION_CREATED,APPLICATION_STATUS_CHANGED", savedEndpoint!!.eventTypes)
+        assertTrue(savedEndpoint!!.active)
     }
 
     @Test
@@ -130,12 +131,14 @@ class WebhookDeliveryServiceTest {
         val endpoint = makeEndpoint("https://example.com/hook").also { it.id = 5L }
         `when`(endpointRepository.findById(5L)).thenReturn(Optional.of(endpoint))
 
-        val captor = ArgumentCaptor.forClass(WebhookEndpoint::class.java)
-        `when`(endpointRepository.save(captor.capture())).thenAnswer { captor.value }
+        var savedEndpoint: WebhookEndpoint? = null
+        `when`(endpointRepository.save(any(WebhookEndpoint::class.java))).thenAnswer { inv ->
+            (inv.arguments[0] as WebhookEndpoint).also { savedEndpoint = it }
+        }
 
         service.deactivateEndpoint(5L, user.id!!)
 
-        assertFalse(captor.value.active)
+        assertFalse(savedEndpoint!!.active)
     }
 
     @Test

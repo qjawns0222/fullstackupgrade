@@ -167,6 +167,9 @@ dependencies {
 
     // XSS Prevention: OWASP HTML Sanitizer for user-submitted content
     implementation 'com.googlecode.owasp-java-html-sanitizer:owasp-java-html-sanitizer:20220608.1'
+
+    // Token Blacklist: Guava BloomFilter for probabilistic in-memory pre-check before Redis lookup
+    implementation 'com.google.guava:guava:33.1.0-jre'
 }
 
 tasks.named('test') {

@@ -5,7 +5,11 @@
       "Bash(xargs cat:*)",
       "Bash(.gradlew.bat test --tests DeadlockRetryAspectTest)",
       "Bash(./gradlew test:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git stash:*)",
+      "Bash(./gradlew clean:*)",
+      "Bash(./gradlew compileTestKotlin)",
+      "Bash(./gradlew dependencies:*)"
     ],
     "deny": [],
     "ask": []

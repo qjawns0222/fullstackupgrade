@@ -20,3 +20,4 @@
 2026-03-30 | Structured Logging | logstash-logback-encoder MDC 기반 JSON 로깅
 2026-03-30 | JSON Schema Validation | networknt/json-schema-validator API 계약 검증
 2026-03-30 | XSS Sanitizer | OWASP Java HTML Sanitizer 기반 정책형 XSS 방어 및 AOP 자동 적용
+2026-03-31 | Token Blacklist | Guava BloomFilter for probabilistic in-memory pre-check before Redis lookup

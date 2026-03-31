@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Backend (Spring Boot)",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd backend && gradlew.bat bootRun"],
+      "port": 8000
+    },
+    {
+      "name": "Frontend (Next.js)",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd frontend && npm run dev"],
+      "port": 3000
+    }
+  ]
+}

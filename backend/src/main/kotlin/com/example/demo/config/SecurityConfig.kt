@@ -18,7 +18,10 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource
 
 @Configuration
 @EnableWebSecurity
-class SecurityConfig(private val jwtTokenProvider: JwtTokenProvider) {
+class SecurityConfig(
+    private val jwtTokenProvider: JwtTokenProvider,
+    private val tokenBlacklistService: com.example.demo.security.TokenBlacklistService
+) {
 
     @Bean
     fun passwordEncoder(): PasswordEncoder {
@@ -37,7 +40,7 @@ class SecurityConfig(private val jwtTokenProvider: JwtTokenProvider) {
                     auth.anyRequest().authenticated()
                 }
                 .addFilterBefore(
-                        JwtAuthenticationFilter(jwtTokenProvider),
+                        JwtAuthenticationFilter(jwtTokenProvider, tokenBlacklistService),
                         UsernamePasswordAuthenticationFilter::class.java
                 )
 

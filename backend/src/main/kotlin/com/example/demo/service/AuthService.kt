@@ -6,6 +6,9 @@ import com.example.demo.entity.RefreshToken
 import com.example.demo.repository.RefreshTokenRepository
 import com.example.demo.repository.UserRepository
 import com.example.demo.security.JwtTokenProvider
+import com.example.demo.security.TokenBlacklistService
+import java.util.Date
+import org.slf4j.LoggerFactory
 import org.springframework.security.authentication.AuthenticationManager
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
 import org.springframework.stereotype.Service
@@ -18,8 +21,10 @@ class AuthService(
         private val refreshTokenRepository: RefreshTokenRepository,
         private val customUserDetailsService: CustomUserDetailsService,
         private val userRepository: UserRepository,
-        private val mfaService: MfaService
+        private val mfaService: MfaService,
+        private val tokenBlacklistService: TokenBlacklistService
 ) {
+        private val log = LoggerFactory.getLogger(javaClass)
 
         @Transactional
         fun login(loginRequest: LoginRequest): TokenDto {
@@ -167,5 +172,31 @@ class AuthService(
                         refreshToken = tokenInfo.refreshToken,
                         accessTokenExpiresIn = tokenInfo.accessTokenExpiresIn
                 )
+        }
+
+        /**
+         * Logout: revokes the access token by adding it to the blacklist,
+         * and deletes the corresponding refresh token from Redis.
+         */
+        @Transactional
+        fun logout(accessToken: String, refreshToken: String?) {
+                if (jwtTokenProvider.validateToken(accessToken)) {
+                        val expiration = jwtTokenProvider.getExpiration(accessToken)
+                        val remainingSeconds = (expiration.time - Date().time) / 1000
+                        tokenBlacklistService.blacklist(accessToken, remainingSeconds)
+                        log.info("Access token blacklisted on logout, remaining={}s", remainingSeconds)
+                }
+
+                if (!refreshToken.isNullOrBlank()) {
+                        val cleanToken = if (refreshToken.startsWith("Bearer ")) {
+                                refreshToken.substring(7)
+                        } else {
+                                refreshToken
+                        }
+                        refreshTokenRepository.findById(cleanToken).ifPresent { saved ->
+                                refreshTokenRepository.delete(saved)
+                                log.info("Refresh token deleted on logout for user={}", saved.username)
+                        }
+                }
         }
 }

@@ -101,6 +101,10 @@ class JwtTokenProvider(
     fun getSubject(token: String): String {
         return parseClaims(token).subject
     }
+
+    fun getExpiration(token: String): Date {
+        return parseClaims(token).expiration
+    }
 }
 
 data class TokenInfo(
