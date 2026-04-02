@@ -170,6 +170,9 @@ dependencies {
 
     // Token Blacklist: Guava BloomFilter for probabilistic in-memory pre-check before Redis lookup
     implementation 'com.google.guava:guava:33.1.0-jre'
+
+    // SQL Parsing: JSqlParser for WHERE clause column extraction and index recommendations
+    implementation 'com.github.jsqlparser:jsqlparser:4.7'
 }
 
 tasks.named('test') {

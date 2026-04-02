@@ -8,11 +8,13 @@ import net.ttddyy.dsproxy.listener.QueryExecutionListener
  * datasource-proxy listener that:
  *  1. Measures elapsed time and raises SlowQueryEvent when threshold exceeded.
  *  2. Counts identical normalized SQLs per-thread and raises N1QueryEvent when threshold exceeded.
+ *  3. Triggers EXPLAIN analysis via SlowQueryExplainService for SELECT slow queries.
  */
 class SlowQueryListener(
     private val slowQueryThresholdMs: Long,
     private val n1ThresholdCount: Int,
-    private val inspector: QueryInspector
+    private val inspector: QueryInspector,
+    private val explainService: SlowQueryExplainService? = null
 ) : QueryExecutionListener {
 
     override fun beforeQuery(execInfo: ExecutionInfo, queryInfoList: MutableList<QueryInfo>) {
@@ -38,6 +40,10 @@ class SlowQueryListener(
                         callerMethod = caller.second
                     )
                 )
+                // Trigger EXPLAIN analysis for SELECT queries only
+                if (isSelectQuery(sql)) {
+                    explainService?.analyzeSlowQuery(sql, elapsedMs)
+                }
             }
 
             // --- N+1 Check ---
@@ -56,6 +62,12 @@ class SlowQueryListener(
             }
         }
     }
+
+    /**
+     * Returns true if the SQL starts with SELECT (after trimming whitespace/comments).
+     */
+    private fun isSelectQuery(sql: String): Boolean =
+        sql.trimStart().uppercase().startsWith("SELECT")
 
     /**
      * Walks the stack to find the first frame inside com.example.demo

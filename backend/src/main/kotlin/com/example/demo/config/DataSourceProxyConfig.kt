@@ -2,6 +2,7 @@ package com.example.demo.config
 
 import com.example.demo.query.QueryInspector
 import com.example.demo.query.QueryMonitorProperties
+import com.example.demo.query.SlowQueryExplainService
 import com.example.demo.query.SlowQueryListener
 import net.ttddyy.dsproxy.support.ProxyDataSourceBuilder
 import org.springframework.beans.factory.annotation.Qualifier
@@ -28,12 +29,14 @@ class DataSourceProxyConfig {
     fun proxyDataSource(
         @Qualifier("dataSource") original: DataSource,
         properties: QueryMonitorProperties,
-        inspector: QueryInspector
+        inspector: QueryInspector,
+        explainService: SlowQueryExplainService
     ): DataSource {
         val listener = SlowQueryListener(
             slowQueryThresholdMs = properties.slowQueryThresholdMs,
             n1ThresholdCount = properties.n1ThresholdCount,
-            inspector = inspector
+            inspector = inspector,
+            explainService = explainService
         )
 
         return ProxyDataSourceBuilder
