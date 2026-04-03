@@ -173,6 +173,10 @@ dependencies {
 
     // SQL Parsing: JSqlParser for WHERE clause column extraction and index recommendations
     implementation 'com.github.jsqlparser:jsqlparser:4.7'
+
+    // Sentry: Error tracking + performance monitoring
+    implementation 'io.sentry:sentry-spring-boot-starter-jakarta:7.4.0'
+    implementation 'io.sentry:sentry-logback:7.4.0'
 }
 
 tasks.named('test') {

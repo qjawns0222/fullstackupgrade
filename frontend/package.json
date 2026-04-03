@@ -10,12 +10,15 @@
     "post-tistory": "ts-node --esm scripts/tistory-poster.ts"
   },
   "dependencies": {
+    "@sentry/nextjs": "^8.55.1",
     "@stomp/stompjs": "^7.3.0",
     "@tanstack/react-query": "^5.90.16",
+    "@types/marked": "^5.0.2",
     "@types/qrcode.react": "^1.0.5",
     "axios": "^1.13.2",
     "clsx": "^2.1.1",
     "lucide-react": "^0.562.0",
+    "marked": "^17.0.5",
     "next": "16.1.1",
     "qrcode.react": "^4.2.0",
     "react": "19.2.3",

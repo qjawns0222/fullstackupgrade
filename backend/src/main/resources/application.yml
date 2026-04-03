@@ -131,6 +131,17 @@ query:
     slow-query-threshold-ms: 300
     n1-threshold-count: 5
 
+sentry:
+  dsn: ${SENTRY_DSN:}
+  traces-sample-rate: 1.0
+  environment: development
+  release: ${spring.application.version:0.0.1}
+  logging:
+    minimum-event-level: error
+    minimum-breadcrumb-level: info
+  enable-user-interaction-tracing: true
+  send-default-pii: true
+
 org:
   jobrunr:
     background-job-server:

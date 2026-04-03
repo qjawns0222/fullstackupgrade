@@ -2,6 +2,7 @@ package com.example.demo.exception
 
 import com.example.demo.dto.ErrorResponse
 import com.example.demo.validation.SchemaValidationException
+import io.sentry.Sentry
 import org.slf4j.LoggerFactory
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.ExceptionHandler
@@ -53,10 +54,11 @@ class GlobalExceptionHandler {
             ))
     }
 
-    /** Generic Exception */
+    /** Generic Exception — 500 에러는 Sentry에 캡처해 즉시 알림 */
     @ExceptionHandler(Exception::class)
     protected fun handleException(e: Exception): ResponseEntity<ErrorResponse> {
         log.error("handleException", e)
+        Sentry.captureException(e)
         val errorCode = ErrorCode.INTERNAL_SERVER_ERROR
         val response =
                 ErrorResponse(

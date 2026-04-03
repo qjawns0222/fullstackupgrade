@@ -5,6 +5,7 @@ import Header from "@/components/Header";
 import { ToastContainer } from "@/components/ui/ToastContainer";
 import QueryProvider from "@/providers/QueryProvider";
 import { NotificationListener } from "@/components/NotificationListener";
+import { SentryErrorBoundary } from "@/components/SentryErrorBoundary";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -32,12 +33,14 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <QueryProvider>
-          <Header />
-          <NotificationListener />
-          <main className="pt-16">
-            {children}
-          </main>
-          <ToastContainer />
+          <SentryErrorBoundary>
+            <Header />
+            <NotificationListener />
+            <main className="pt-16">
+              {children}
+            </main>
+            <ToastContainer />
+          </SentryErrorBoundary>
         </QueryProvider>
       </body>
     </html>
