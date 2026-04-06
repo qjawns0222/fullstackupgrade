@@ -54,7 +54,7 @@ const DASHBOARD_QUERY = `
 export default function GraphQlExplorerPage() {
     const [activeQuery, setActiveQuery] = useState<string>('');
     const [customQuery, setCustomQuery] = useState<string>(MY_APPLICATIONS_QUERY.trim());
-    const [result, setResult] = useState<unknown>(null);
+    const [result, setResult] = useState<string | null>(null);
     const [error, setError] = useState<string>('');
     const [loading, setLoading] = useState(false);
     const [executionTime, setExecutionTime] = useState<number | null>(null);
@@ -66,7 +66,7 @@ export default function GraphQlExplorerPage() {
         const start = performance.now();
         try {
             const data = await gql<unknown>(query);
-            setResult(data);
+            setResult(JSON.stringify(data, null, 2));
             setExecutionTime(Math.round(performance.now() - start));
         } catch (e: unknown) {
             setError(e instanceof Error ? e.message : 'Unknown error');
@@ -157,7 +157,7 @@ export default function GraphQlExplorerPage() {
                         )}
                         {result && !loading && (
                             <pre className="text-green-400 text-sm whitespace-pre-wrap">
-                                {JSON.stringify(result, null, 2)}
+                                {result}
                             </pre>
                         )}
                         {!result && !error && !loading && (

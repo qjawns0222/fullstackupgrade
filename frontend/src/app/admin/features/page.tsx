@@ -1,10 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
+import { useState } from "react";
 
 interface FeatureFlag {
     name: string;
@@ -29,43 +25,40 @@ export default function FeaturesAdminPage() {
         <div className="p-6 space-y-6">
             <div className="flex justify-between items-center">
                 <h1 className="text-3xl font-bold">Feature Management</h1>
-                <Badge variant="outline" className="px-3 py-1">Unleash (Simulated)</Badge>
+                <span className="px-3 py-1 border rounded-full text-sm text-gray-600">Unleash (Simulated)</span>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {features.map((feature) => (
-                    <Card key={feature.name} className="hover:shadow-md transition-shadow">
-                        <CardHeader className="pb-2">
-                            <div className="flex justify-between items-start">
-                                <CardTitle className="text-xl font-semibold">{feature.name}</CardTitle>
-                                <Badge variant={feature.enabled ? "default" : "secondary"}>
-                                    {feature.enabled ? "Active" : "Disabled"}
-                                </Badge>
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            <p className="text-sm text-gray-500 mb-6">{feature.description}</p>
-                            <div className="flex items-center space-x-2">
-                                <Switch
-                                    id={`toggle-${feature.name}`}
-                                    checked={feature.enabled}
-                                    onCheckedChange={() => toggleFeature(feature.name)}
-                                />
-                                <Label htmlFor={`toggle-${feature.name}`}>Toggle State</Label>
-                            </div>
-                        </CardContent>
-                    </Card>
+                    <div key={feature.name} className="bg-white border rounded-lg p-4 hover:shadow-md transition-shadow">
+                        <div className="flex justify-between items-start mb-2">
+                            <h2 className="text-lg font-semibold">{feature.name}</h2>
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${feature.enabled ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-600"}`}>
+                                {feature.enabled ? "Active" : "Disabled"}
+                            </span>
+                        </div>
+                        <p className="text-sm text-gray-500 mb-4">{feature.description}</p>
+                        <div className="flex items-center gap-3">
+                            <button
+                                role="switch"
+                                aria-checked={feature.enabled}
+                                onClick={() => toggleFeature(feature.name)}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${feature.enabled ? "bg-blue-600" : "bg-gray-300"}`}
+                            >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${feature.enabled ? "translate-x-6" : "translate-x-1"}`} />
+                            </button>
+                            <label className="text-sm text-gray-600">Toggle State</label>
+                        </div>
+                    </div>
                 ))}
             </div>
 
-            <Card className="bg-blue-50 border-blue-200">
-                <CardContent className="pt-6">
-                    <p className="text-sm text-blue-700">
-                        <strong>Note:</strong> In this environment, the status above is simulated for demonstration.
-                        In production, this UI connects to the Unleash API to control flags dynamically across all instances.
-                    </p>
-                </CardContent>
-            </Card>
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <p className="text-sm text-blue-700">
+                    <strong>Note:</strong> In this environment, the status above is simulated for demonstration.
+                    In production, this UI connects to the Unleash API to control flags dynamically across all instances.
+                </p>
+            </div>
         </div>
     );
 }

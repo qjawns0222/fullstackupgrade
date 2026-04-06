@@ -57,6 +57,20 @@
   - /api/perf/stats, /api/perf/summary API
   - 프론트엔드: /perf-stats 대시보드
 
+## 메시지 큐 / 신뢰성
+- RabbitMQ Dead Letter Queue 자동 관리
+  - audit.queue에 x-dead-letter-exchange/routing-key/message-ttl 설정
+  - DLQ 수신 → dlq_messages 테이블 자동 적재 (DlqMonitorService @RabbitListener)
+  - PENDING / RETRYING / RESOLVED / DISCARDED 상태 머신
+  - 단건 재처리(POST /api/dlq/{id}/retry), 전체 재처리(POST /api/dlq/retry-all), 폐기(POST /api/dlq/{id}/discard)
+  - GET /api/dlq (페이징+상태필터), GET /api/dlq/stats 통계 API
+  - 프론트엔드: /admin/dlq 대시보드 (실시간 5s polling, 통계 카드, 단건/전체 재처리)
+
+## 모니터링 / 에러 추적
+- Sentry 에러 추적 + 세션 리플레이 (sentry-spring-boot-starter-jakarta + @sentry/nextjs)
+  - 백엔드: GlobalExceptionHandler에서 500 에러 자동 캡처, SentryContextFilter로 requestId/userId scope 주입
+  - 프론트엔드: React ErrorBoundary, 에러 세션 100% 리플레이, /admin/sentry 대시보드
+
 ## 기타 인프라
 - Spring Modulith 모듈 경계 검증 (ArchUnit)
 - OpenAPI/Swagger UI
