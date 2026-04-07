@@ -131,6 +131,9 @@ query:
     slow-query-threshold-ms: 300
     n1-threshold-count: 5
 
+encryption:
+  keyset-redis-key: tink:keyset:primary
+
 sentry:
   dsn: ${SENTRY_DSN:}
   traces-sample-rate: 1.0

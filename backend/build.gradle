@@ -171,6 +171,9 @@ dependencies {
     // Token Blacklist: Guava BloomFilter for probabilistic in-memory pre-check before Redis lookup
     implementation 'com.google.guava:guava:33.1.0-jre'
 
+    // Field-Level Encryption: Google Tink for AES-GCM authenticated encryption + key rotation
+    implementation 'com.google.crypto.tink:tink:1.11.0'
+
     // SQL Parsing: JSqlParser for WHERE clause column extraction and index recommendations
     implementation 'com.github.jsqlparser:jsqlparser:4.7'
 

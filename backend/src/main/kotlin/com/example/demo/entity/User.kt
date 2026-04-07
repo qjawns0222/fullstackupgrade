@@ -1,5 +1,7 @@
 package com.example.demo.entity
 
+import com.example.demo.encryption.EncryptedStringConverter
+import jakarta.persistence.Convert
 import jakarta.persistence.Entity
 import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
@@ -16,7 +18,9 @@ class User(
         var username: String? = null,
         @field:Size(min = 6, message = "비밀번호는 6자 이상이어야 합니다.") var password: String? = null,
         @field:NotBlank(message = "권한은 필수입니다.") var role: String? = null,
+        @Convert(converter = EncryptedStringConverter::class)
         var email: String? = null,
+        @Convert(converter = EncryptedStringConverter::class)
         var mfaSecret: String? = null,
         var mfaEnabled: Boolean = false
 )

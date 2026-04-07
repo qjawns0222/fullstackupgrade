@@ -1,5 +1,6 @@
 package com.example.demo.entity
 
+import com.example.demo.encryption.EncryptedStringConverter
 import jakarta.persistence.*
 import java.time.LocalDateTime
 
@@ -9,6 +10,7 @@ class Resume(
     @Column(nullable = false)
     var originalFileName: String,
 
+    @Convert(converter = EncryptedStringConverter::class)
     @Column(columnDefinition = "TEXT")
     var content: String?,
 
