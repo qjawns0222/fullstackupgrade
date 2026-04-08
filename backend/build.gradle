@@ -180,6 +180,9 @@ dependencies {
     // Sentry: Error tracking + performance monitoring
     implementation 'io.sentry:sentry-spring-boot-starter-jakarta:7.4.0'
     implementation 'io.sentry:sentry-logback:7.4.0'
+
+    // API Breaking Change Detection: openapi-diff for schema version comparison
+    implementation 'org.openapitools.openapidiff:openapi-diff-core:2.1.0'
 }
 
 tasks.named('test') {
