@@ -27,6 +27,11 @@
   - 프론트엔드: /admin/encryption 대시보드 (상태 카드, 검증 도구, 로테이션 히스토리)
 
 ## 데이터 / 검색
+- Testcontainers MariaDB 마이그레이션 자동 검증 (testcontainers:mariadb:1.19.7)
+  - MariaDbMigrationTest: V1~V7 테이블 구조·FK·인덱스·데이터 삽입 검증 (Docker 없는 환경 자동 skip)
+  - MigrationStatusController: /api/migration/status Flyway 이력 조회 API
+  - /admin/migration 대시보드: 5s polling, 버전·상태·실행시간 테이블
+  - V5/V6 SQL H2 호환 수정: 인라인 INDEX → CREATE INDEX
 - MariaDB + JPA/Hibernate + Flyway 스키마 관리
 - QueryDSL 동적 쿼리 (이력서 복합 검색)
 - Elasticsearch 이력서 전문 검색 (한국어 초성 지원)
