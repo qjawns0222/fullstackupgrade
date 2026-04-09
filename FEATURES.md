@@ -3,6 +3,13 @@
 스킬이 새 기능을 구현할 때마다 이 파일을 업데이트한다.
 새 미션 선정 시 이 목록을 먼저 읽어 중복을 피한다.
 
+## API 변경 관리
+- API Breaking Change 자동 감지 (openapi-diff-core 2.1.0)
+  - ApplicationReadyEvent 시 /v3/api-docs 스냅샷 자동 캡처 + DB 저장
+  - 직전 스냅샷과 OpenApiCompare로 비교: ENDPOINT_REMOVED, PARAMETER_ADDED_REQUIRED, PARAMETER_REMOVED, RESPONSE_SCHEMA_CHANGED, REQUEST_BODY_CHANGED 5가지 유형 감지
+  - GET /api/api-changes/breaking, /stats, /snapshots, /breaking/between API
+  - 프론트엔드: /admin/api-changes 대시보드 (Breaking Change 목록 + 스냅샷 이력 탭)
+
 ## 보안 / 인증
 - JWT 인증 필터 + Refresh Token rotation (Redis)
 - MFA/TOTP 2단계 인증 (dev.samstevens.totp)
@@ -10,6 +17,14 @@
 - OWASP HTML Sanitizer XSS 방어 (policy-based: plain/rich/resume 3종)
 - Rate Limiting — Bucket4j + Redis 분산 버킷 (annotation + interceptor)
 - Idempotency Key — Redis 기반 중복 요청 차단 (@Idempotent AOP)
+- 필드 레벨 암호화 + 키 로테이션 (Google Tink AES-256-GCM)
+  - TinkConfig: 키셋을 Redis에 저장, 앱 기동 시 자동 생성/로딩
+  - EncryptedStringConverter: JPA AttributeConverter로 투명한 암복호화
+  - Resume.content, User.email, User.mfaSecret 필드 암호화 적용
+  - KeyRotationScheduler: 매일 새벽 2시 자동 로테이션 + 수동 로테이션 API
+  - key_rotation_history 테이블로 로테이션 이력 추적
+  - GET /api/encryption/status, POST /api/encryption/rotate, POST /api/encryption/verify
+  - 프론트엔드: /admin/encryption 대시보드 (상태 카드, 검증 도구, 로테이션 히스토리)
 
 ## 데이터 / 검색
 - MariaDB + JPA/Hibernate + Flyway 스키마 관리

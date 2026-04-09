@@ -1,10 +1,12 @@
 package com.example.demo
 
 import com.example.demo.config.QuerydslConfig
+import com.example.demo.encryption.EncryptionService
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
+import org.springframework.boot.test.mock.mockito.MockBean
 import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.TestPropertySource
@@ -20,6 +22,9 @@ import org.springframework.test.context.TestPropertySource
                         "spring.flyway.baseline-on-migrate=true"]
 )
 class SchemaMigrationTest {
+
+        @MockBean
+        lateinit var encryptionService: EncryptionService
 
         @Autowired lateinit var jdbcTemplate: JdbcTemplate
 

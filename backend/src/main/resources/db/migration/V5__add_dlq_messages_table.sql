@@ -11,7 +11,8 @@ CREATE TABLE dlq_messages (
     failed_at          DATETIME(6)  NOT NULL,
     resolved_at        DATETIME(6),
     retry_count        INT          NOT NULL DEFAULT 0,
-    last_error         TEXT,
-    INDEX idx_dlq_status (dlq_status),
-    INDEX idx_failed_at (failed_at)
+    last_error         TEXT
 );
+
+CREATE INDEX idx_dlq_status ON dlq_messages (dlq_status);
+CREATE INDEX idx_failed_at ON dlq_messages (failed_at);
