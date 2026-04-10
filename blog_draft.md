@@ -1,188 +1,114 @@
-[Fullstack] Testcontainers MariaDB 마이그레이션 자동 검증 - Flyway 스키마 오류를 배포 전에 잡는 법
+[Fullstack] 메서드 레벨 타이밍 추적 - @WithSpan AOP와 병목 감지 대시보드
 
 ---
 
-Flyway를 쓰면서 한동안은 괜찮았다. 마이그레이션 파일을 작성하고, H2 기반 테스트가 초록불이 뜨면 배포했다. 그러다 어느 날 운영 배포 후 `Table 'study_db.key_rotation_history' doesn't exist`라는 에러가 Sentry에 찍혔다. 원인을 파보니 H2에서는 잘 돌던 마이그레이션 SQL이 MariaDB에서는 실패하고 있었다. `INDEX idx_name (col)` 인라인 문법이 H2에서는 통과되지만 MariaDB와의 동작 차이로 인해 Flyway가 실제 DB에서 중단된 것이다.
+Micrometer로 엔드포인트 응답 시간은 잡히는데, 그 안에서 어느 메서드가 병목인지는 전혀 보이지 않았다. `/api/resumes`가 800ms인데 OCR인지, DB인지, 캐시 미스인지 알 수 없었다. Zipkin 같은 분산 트레이싱 도구를 붙이면 좋겠지만, 지금 프로젝트에서 그 정도 인프라를 셋업하기엔 오버스펙이다.
 
-H2 호환 모드(`MODE=MySQL`)를 쓰면 어느 정도 커버되지만, 완전히 동일하지는 않다. 테스트는 초록불인데 운영은 빨간불인 상황이 생긴다. 이걸 근본적으로 해결하려면 테스트에서도 실제 MariaDB를 써야 한다.
-
-Testcontainers가 이 문제를 깔끔하게 풀어준다. Docker로 MariaDB 컨테이너를 테스트 시간에 올리고, 실제 Flyway 마이그레이션을 돌린 뒤, 테이블 구조와 외래키까지 검증한다.
+그래서 선택한 방법은 간단하다. Spring AOP로 어노테이션 기반 메서드 타이밍 측정기를 직접 만들었다.
 
 ---
 
-핵심 코드부터 보자.
+핵심 아이디어는 `@WithSpan` 어노테이션 하나다.
 
 ```kotlin
-@Testcontainers(disabledWithoutDocker = true)
-@JdbcTest
-@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
-class MariaDbMigrationTest {
+@Target(AnnotationTarget.FUNCTION)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class WithSpan(
+    val name: String = "",
+    val slowThresholdMs: Long = 500L
+)
+```
 
-    companion object {
-        @Container
-        @JvmStatic
-        val mariadb: MariaDBContainer<*> = MariaDBContainer("mariadb:10.11")
-            .withDatabaseName("test_db")
-            .withUsername("test")
-            .withPassword("test")
+이걸 원하는 메서드에 붙이면 AOP가 실행 시간을 측정해서 DB에 저장한다.
 
-        @DynamicPropertySource
-        @JvmStatic
-        fun configureProperties(registry: DynamicPropertyRegistry) {
-            registry.add("spring.datasource.url") { mariadb.jdbcUrl }
-            registry.add("spring.datasource.username") { mariadb.username }
-            registry.add("spring.datasource.password") { mariadb.password }
-            registry.add("spring.datasource.driver-class-name") { "org.mariadb.jdbc.Driver" }
-            registry.add("spring.flyway.enabled") { "true" }
-            registry.add("spring.flyway.baseline-on-migrate") { "true" }
+```kotlin
+@Aspect
+@Component
+class WithSpanAspect(private val spanStore: SpanStore) {
+
+    @Around("@annotation(withSpan)")
+    fun trace(joinPoint: ProceedingJoinPoint, withSpan: WithSpan): Any? {
+        val signature = joinPoint.signature as MethodSignature
+        val className = signature.declaringTypeName.substringAfterLast('.')
+        val methodName = signature.name
+        val spanName = withSpan.name.ifBlank { "$className.$methodName" }
+
+        val startMs = System.currentTimeMillis()
+        var status = "SUCCESS"
+        var errorMessage: String? = null
+
+        return try {
+            val result = joinPoint.proceed()
+            val durationMs = System.currentTimeMillis() - startMs
+            if (durationMs >= withSpan.slowThresholdMs) {
+                status = "SLOW"
+                logger.warn("[WithSpan] SLOW: {} took {}ms", spanName, durationMs)
+            }
+            result
+        } catch (ex: Throwable) {
+            status = "ERROR"
+            errorMessage = ex.message?.take(500)
+            throw ex
+        } finally {
+            val durationMs = System.currentTimeMillis() - startMs
+            spanStore.save(SpanRecord(
+                spanName = spanName,
+                className = className,
+                methodName = methodName,
+                durationMs = durationMs,
+                status = status,
+                errorMessage = errorMessage
+            ))
         }
     }
+}
 ```
 
-`disabledWithoutDocker = true` 옵션이 중요하다. Docker가 없는 환경(GitHub Actions 일부 러너, 로컬 개발 머신)에서는 테스트를 자동으로 skip한다. Docker가 있는 CI 환경에서만 실제로 돌아간다.
-
-`@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)`은 Spring이 H2로 DataSource를 자동 교체하는 걸 막는다. 컨테이너의 MariaDB를 그대로 쓰겠다는 선언이다.
+status가 SUCCESS/SLOW/ERROR 세 가지인 게 포인트다. 에러가 없어도 임계값(기본 500ms)을 넘으면 SLOW로 분류해서 따로 조회할 수 있다.
 
 ---
 
-테스트 내용은 단순하다. 마이그레이션이 성공적으로 실행됐는지, 테이블이 존재하는지, 컬럼이 올바른지, 외래키가 걸려있는지, 실제 INSERT/SELECT가 되는지까지 검증한다.
+데이터 레이어는 포트 인터페이스 패턴으로 분리했다.
 
 ```kotlin
-@Test
-fun `V1 users 테이블이 올바른 컬럼과 함께 생성된다`() {
-    val columns = getColumnNames("users")
-    assertThat(columns).containsExactlyInAnyOrder("id", "username", "password", "role", "email")
-}
-
-@Test
-fun `외래키 제약조건 - resumes는 users를 참조한다`() {
-    val fkCount = jdbcTemplate.queryForObject(
-        """
-        SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE
-        WHERE TABLE_SCHEMA = DATABASE()
-          AND TABLE_NAME = 'resumes'
-          AND REFERENCED_TABLE_NAME = 'users'
-        """.trimIndent(),
-        Long::class.java
-    ) ?: 0L
-    assertThat(fkCount).isGreaterThanOrEqualTo(1L)
-}
-
-@Test
-fun `ORM 매핑 검증 - users 테이블에 데이터를 삽입하고 조회할 수 있다`() {
-    jdbcTemplate.execute(
-        "INSERT INTO users (username, password, role, email) VALUES ('migration_test_user', 'pw', 'USER', 'test@test.com')"
-    )
-    val count = jdbcTemplate.queryForObject(
-        "SELECT COUNT(*) FROM users WHERE username = 'migration_test_user'",
-        Long::class.java
-    ) ?: 0L
-    assertThat(count).isEqualTo(1L)
+interface SpanStore {
+    fun save(record: SpanRecord): SpanRecord
+    fun findRecent(limit: Int): List<SpanRecord>
+    fun findSlowSpans(thresholdMs: Long, limit: Int): List<SpanRecord>
+    fun stats(): SpanStats
 }
 ```
 
-컬럼명 검증은 `information_schema.COLUMNS`를 직접 쿼리한다. 이렇게 하면 엔티티 클래스가 아닌 실제 DB 스키마를 기준으로 검증하기 때문에 JPA 매핑 오류를 배포 전에 잡을 수 있다.
+`JpaSpanStore`가 실제 구현이고, 테스트에서는 `FakeSpanStore`로 10줄짜리 인메모리 구현을 쓴다. 덕분에 `WithSpanAspect` 단위 테스트가 Spring Context 없이 깔끔하게 돌아간다.
 
 ---
 
-구현하면서 예상치 못한 문제를 두 개 만났다.
+구현 중에 재미있는 문제가 하나 있었다. 테스트에서 `mock(WithSpan::class.java)`로 어노테이션을 목킹했는데, `signature.method.name`이 항상 "toString"을 반환했다. Mockito가 `sig.method`에 `String::class.java.getMethod("toString")`을 반환하도록 stubbing했기 때문이다.
 
-첫 번째는 V5, V6 마이그레이션의 인라인 INDEX 문법이었다.
-
-```sql
--- 기존 (H2에서만 동작)
-CREATE TABLE dlq_messages (
-    ...
-    INDEX idx_dlq_status (dlq_status),
-    INDEX idx_failed_at (failed_at)
-);
-```
-
-이 구문이 MariaDB에서는 파싱 오류를 냈다. `CREATE TABLE` 안에 `INDEX` 절을 쓰는 방식이 H2와 MariaDB 사이에 미묘하게 달랐다. 해결은 간단했다. 테이블 생성 후 별도 `CREATE INDEX`로 분리했다.
-
-```sql
--- 수정 후 (H2 + MariaDB 모두 동작)
-CREATE TABLE dlq_messages (
-    ...
-    last_error TEXT
-);
-
-CREATE INDEX idx_dlq_status ON dlq_messages (dlq_status);
-CREATE INDEX idx_failed_at ON dlq_messages (failed_at);
-```
-
-이 문제가 기존 `SchemaMigrationTest`(H2 기반)에서는 전혀 감지되지 않았다는 게 포인트다. H2가 관대하게 처리해준 덕분에 그냥 넘어갔던 것이다.
-
-두 번째는 Spring 컨텍스트 오염 문제였다. `JpaApiSnapshotStore`라는 클래스가 `ApiSnapshotStore`와 `ApiBreakingChangeStore` 두 인터페이스를 동시에 구현하고 있었는데, 두 인터페이스 모두 `findAllDesc()`를 선언하고 있었다. 반환 타입이 달라서 Kotlin 컴파일러가 충돌로 판단했다.
-
-```
-Conflicting overloads: public open fun findAllDesc(): List<ApiSnapshot>
-defined in JpaApiSnapshotStore, public open fun findAllDesc(): List<ApiBreakingChange>
-defined in JpaApiSnapshotStore
-```
-
-기존 코드가 컴파일 자체가 안 되는 상태였다. 두 인터페이스를 각각 별도 `@Component`로 구현해서 분리했다.
+해결은 간단했다. `signature.method.name` 대신 `signature.name`을 쓰면 된다. `MethodSignature.name`은 AspectJ가 실제 인터셉트된 메서드 이름을 직접 들고 있어서 mock에서도 제대로 동작한다.
 
 ```kotlin
-@Component
-class JpaApiSnapshotStore(
-    private val snapshotRepo: ApiSnapshotRepository
-) : ApiSnapshotStore {
-    override fun findAllDesc() = snapshotRepo.findAllOrderByCreatedAtDesc()
-    // ...
-}
+// 이전 (mock에서 "toString" 반환)
+val methodName = signature.method.name
 
-@Component
-class JpaApiBreakingChangeStore(
-    private val breakingRepo: ApiBreakingChangeRepository
-) : ApiBreakingChangeStore {
-    override fun findAllDesc() = breakingRepo.findAllByOrderByDetectedAtDesc()
-    // ...
-}
+// 수정 후
+val methodName = signature.name
 ```
 
 ---
 
-프론트엔드에는 `/admin/migration` 대시보드를 추가했다. 5초마다 `/api/migration/status`를 폴링해서 현재 Flyway 버전, 전체/적용/실패/대기 건수를 카드로 보여준다. 실패한 마이그레이션이 있으면 빨간 경고 배너도 뜬다.
+REST API는 세 개다.
 
-```kotlin
-@RestController
-@RequestMapping("/api/migration")
-class MigrationStatusController(private val flyway: Flyway) {
-
-    @GetMapping("/status")
-    fun getStatus(): MigrationStatusResponse {
-        val info = flyway.info()
-        val all = info.all()
-        val applied = all.filter { it.state == MigrationState.SUCCESS }
-        val failed = all.filter { it.state == MigrationState.FAILED }
-        val pending = all.filter { it.state == MigrationState.PENDING }
-
-        return MigrationStatusResponse(
-            total = all.size,
-            applied = applied.size,
-            failed = failed.size,
-            pending = pending.size,
-            currentVersion = info.current()?.version?.version ?: "none",
-            migrations = all.map { m ->
-                MigrationInfo(
-                    version = m.version?.version ?: "repeatable",
-                    description = m.description ?: "",
-                    type = m.type?.toString() ?: "UNKNOWN",
-                    state = m.state?.name ?: "UNKNOWN",
-                    installedOn = m.installedOn?.let { formatter.format(it.toInstant()) },
-                    executionTime = m.executionTime
-                )
-            }
-        )
-    }
-}
 ```
+GET /api/tracing/stats           → 전체/SLOW/ERROR 카운트 + 평균 응답시간
+GET /api/tracing/recent?limit=50 → 최근 Span 목록
+GET /api/tracing/slow?thresholdMs=500&limit=50 → 임계값 초과 Span 목록
+```
+
+프론트엔드는 `/admin/tracing`에 TanStack Query 5초 폴링으로 실시간 대시보드를 붙였다. 상단에 통계 카드 4개(전체, SLOW, ERROR, 평균 응답), 하단에 최근 Span/SLOW Span 탭 전환 테이블이다. 응답시간 컬럼에서 임계값 초과 항목은 노란색으로 강조된다.
 
 ---
 
-Testcontainers 접근법의 단점은 분명히 있다. 테스트 시간이 길어진다. MariaDB 컨테이너를 올리는 데만 몇 초가 걸린다. 그래서 `disabledWithoutDocker = true`로 로컬에서는 skip하도록 했고, CI에서만 실행되게 할 계획이다.
+실제로 써보면 꽤 유용하다. OCR 서비스에 `@WithSpan(name = "ocr.process", slowThresholdMs = 3000L)` 붙이고, 캐시 조회에 `@WithSpan(slowThresholdMs = 100L)` 붙이면 대시보드에서 즉시 보인다. Zipkin 없이도 "어느 메서드가 얼마나 걸리는지" 한눈에 파악할 수 있다.
 
-하지만 얻는 것도 분명하다. H2 호환 모드에 의존하던 테스트의 신뢰도 문제가 해결된다. 마이그레이션 파일을 수정하고 나서 "이게 실제로 MariaDB에서도 될까?"를 더 이상 손으로 확인할 필요가 없다.
-
-운영에서 마이그레이션이 실패하면 롤백이 필요하고, 다운타임이 생기고, Flyway 상태를 수동으로 수습해야 한다. 그 비용을 생각하면 컨테이너 올리는 몇 초는 충분히 투자할 가치가 있다.
+Flyway V8 마이그레이션으로 `span_records` 테이블을 추가했고, `recorded_at DESC`, `status`, `duration_ms DESC` 세 인덱스를 걸었다. 장기적으로는 오래된 레코드 자동 정리 스케줄러가 필요하겠지만, 일단은 조회 성능만 챙겼다.

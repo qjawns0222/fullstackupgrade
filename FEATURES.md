@@ -3,6 +3,13 @@
 스킬이 새 기능을 구현할 때마다 이 파일을 업데이트한다.
 새 미션 선정 시 이 목록을 먼저 읽어 중복을 피한다.
 
+## 모니터링 / 트레이싱
+- 메서드 레벨 타이밍 추적 (Spring AOP + @WithSpan)
+  - @WithSpan 어노테이션으로 메서드 실행 시간 자동 측정, SUCCESS/SLOW/ERROR 상태 분류
+  - SpanStore 포트 인터페이스 + JpaSpanStore 어댑터 (Flyway V8 span_records 테이블)
+  - GET /api/tracing/stats, /recent, /slow REST API
+  - 프론트엔드: /admin/tracing 대시보드 (5s polling, 최근 Span/SLOW Span 탭 전환)
+
 ## API 변경 관리
 - API Breaking Change 자동 감지 (openapi-diff-core 2.1.0)
   - ApplicationReadyEvent 시 /v3/api-docs 스냅샷 자동 캡처 + DB 저장
