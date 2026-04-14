@@ -3,6 +3,14 @@
 스킬이 새 기능을 구현할 때마다 이 파일을 업데이트한다.
 새 미션 선정 시 이 목록을 먼저 읽어 중복을 피한다.
 
+## 사용자 행동 분석
+- 퍼널 분석 (이력서 조회→저장→다운로드 전환율 추적)
+  - UserEvent JPA 엔티티 + Flyway V10 user_events 테이블 (session_id/user_id/event_type/resource_id)
+  - UserEventStore 포트 인터페이스 + JpaUserEventStore 어댑터 (JPQL COUNT DISTINCT 집계)
+  - FunnelAnalysisService: RESUME_VIEW→SAVE→DOWNLOAD 단계별 세션 수 + 전환율 계산
+  - POST /api/funnel/events (이벤트 기록), GET /api/funnel/stats?periodHours= (퍼널 통계)
+  - 프론트엔드: /admin/funnel 대시보드 (퍼널 바 차트, 이탈 수 표시, 기간 선택, 5s polling)
+
 ## 모니터링 / 트레이싱
 - 메서드 레벨 타이밍 추적 (Spring AOP + @WithSpan)
   - @WithSpan 어노테이션으로 메서드 실행 시간 자동 측정, SUCCESS/SLOW/ERROR 상태 분류
