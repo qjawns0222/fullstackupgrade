@@ -98,6 +98,15 @@
   - 백엔드: GlobalExceptionHandler에서 500 에러 자동 캡처, SentryContextFilter로 requestId/userId scope 주입
   - 프론트엔드: React ErrorBoundary, 에러 세션 100% 리플레이, /admin/sentry 대시보드
 
+## 멀티 테넌시
+- 스키마 기반 멀티 테넌트 데이터 격리
+  - TenantContext (ThreadLocal) + TenantFilter: X-Tenant-ID 헤더로 테넌트 식별, 미지정 시 default 테넌트
+  - TenantRoutingDataSource (AbstractRoutingDataSource): 테넌트별 DataSource 동적 라우팅
+  - TenantStore 포트 인터페이스 + JpaTenantStore 어댑터 (Flyway V9 tenants 테이블)
+  - TenantService: 테넌트 생성/정지/활성화/삭제 라이프사이클 + 스키마명 자동 생성
+  - REST API: POST/GET /api/tenants, PUT /{id}/suspend, PUT /{id}/activate, DELETE /{id}, GET /stats
+  - 프론트엔드: /admin/tenant 관리 대시보드 (5s polling, 상태별 통계 카드, 테넌트 CRUD)
+
 ## 기타 인프라
 - Spring Modulith 모듈 경계 검증 (ArchUnit)
 - OpenAPI/Swagger UI
