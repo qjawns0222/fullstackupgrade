@@ -60,6 +60,13 @@
 - Spring Modulith 이벤트 퍼블리케이션 (@ApplicationModuleListener + JPA outbox)
 - RabbitMQ 감사 로그 파이프라인 (AuditLogAspect → RabbitMQ → ES 인덱싱)
 - Webhook 발송 시스템 — OkHttp3 HMAC 서명, 지수 백오프 재시도, 발송 로그
+- GraphQL Subscription 실시간 알림 (graphql-transport-ws 프로토콜)
+  - ApplicationSubscriptionService: Sinks.many().multicast() 기반 Flux 스트림, 유저별 필터링
+  - @SubscriptionMapping ApplicationSubscriptionController: 인증된 사용자 전용 스트림
+  - schema.graphqls Subscription 타입 + ApplicationStatusChangedEvent 추가
+  - JobApplicationService.changeStatus() 에서 이벤트 발행 (STOMP/Webhook과 병렬)
+  - reactor-test StepVerifier 단위 테스트 3개
+  - 프론트엔드: /admin/graphql-subscription 대시보드 (WebSocket 연결 로그, 실시간 이벤트 스트림)
 
 ## 파일 처리
 - MinIO(S3 호환) 파일 업로드/다운로드 (Resilience4j Circuit Breaker + Retry)

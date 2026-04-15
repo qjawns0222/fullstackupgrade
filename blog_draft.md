@@ -1,164 +1,189 @@
-[Fullstack] 사용자 행동 퍼널 분석 - 이력서 조회→저장→다운로드 전환율 추적
+[Fullstack] GraphQL Subscription 실시간 알림 - graphql-transport-ws로 폴링 없애기
 
 ---
 
-감사 로그는 이미 있었다. 누가 언제 어떤 API를 호출했는지 Elasticsearch에 다 쌓이고 있었다. 그런데 "이력서를 조회한 사람 중 몇 퍼센트가 저장하고, 저장한 사람 중 몇 퍼센트가 다운로드하는가"를 물어보면 아무것도 없었다. 로그는 있는데 퍼널은 없는 상태. 이게 생각보다 쓸모없다. 전환율 없이는 어느 단계에서 사용자가 이탈하는지 알 수 없다.
+WebSocket STOMP 알림은 이미 있었다. 분석 진행 상태, 배치 잡 완료, Redis pub/sub 메시지까지 `/topic/notifications`로 잘 날아오고 있었다. 그런데 GraphQL 레이어에서는 아무것도 없었다. 클라이언트가 지원서 상태 변경을 알려면 5초마다 `myApplications` 쿼리를 폴링하거나, STOMP 연결을 별도로 유지해야 했다.
 
-Amplitude 같은 외부 SaaS를 붙이는 방법도 있다. `features-todo.md`에 `com.amplitude:java-sdk:1.10.2`를 쓰는 방안이 적혀 있었다. 그런데 외부 SDK를 도입하면 이벤트 스키마가 외부 시스템에 종속된다. 직접 MariaDB에 이벤트를 쌓고 집계 쿼리로 퍼널을 계산하는 게 더 직관적이고, 이 프로젝트에서 이미 쓰는 스택에서 벗어나지 않는다. 외부 의존성 없이 같은 기능을 만들 수 있다면 굳이 SDK를 추가할 필요가 없다.
+GraphQL 클라이언트를 쓰는 입장에서 이건 어색하다. GraphQL을 선택한 이유 중 하나가 "단일 인터페이스"인데, 폴링이나 STOMP를 따로 붙이면 그 이점이 반감된다. GraphQL Subscription을 도입해서 상태 변경을 GraphQL 프로토콜로 스트리밍하기로 했다.
 
 ---
 
-설계는 단순하게 잡았다. 이벤트 하나를 DB에 저장하고, 저장된 이벤트를 집계해서 퍼널 통계를 내는 것. 퍼널 단계는 세 개다: `RESUME_VIEW`, `RESUME_SAVE`, `RESUME_DOWNLOAD`.
+Spring for GraphQL 1.2.4가 이미 의존성에 있었다. `@SubscriptionMapping` 어노테이션도 있고, Flux를 반환하면 된다는 건 알고 있었다. 문제는 전송 계층이었다.
 
-테이블부터 만들었다.
+WebSocket을 활성화하는 방법이 두 가지다. `graphql-ws` 라이브러리가 쓰는 `graphql-transport-ws` 프로토콜과, 구버전 `subscriptions-transport-ws` 프로토콜. Spring for GraphQL은 `graphql-transport-ws`를 기본으로 지원한다. `application.yml`에 경로만 추가하면 된다.
 
-```sql
-CREATE TABLE user_events (
-    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
-    session_id  VARCHAR(100) NOT NULL,
-    user_id     VARCHAR(100),
-    event_type  VARCHAR(50)  NOT NULL,
-    resource_id VARCHAR(200),
-    metadata    TEXT,
-    occurred_at DATETIME(6)  NOT NULL
-);
-
-CREATE INDEX idx_user_events_session_id  ON user_events (session_id);
-CREATE INDEX idx_user_events_event_type  ON user_events (event_type);
-CREATE INDEX idx_user_events_occurred_at ON user_events (occurred_at DESC);
-CREATE INDEX idx_user_events_user_id     ON user_events (user_id);
+```yaml
+spring:
+  graphql:
+    websocket:
+      path: /graphql-ws
 ```
 
-`session_id`가 핵심이다. 퍼널 분석에서 "한 사람이 조회 후 저장했다"를 추적하려면 같은 세션에서 발생한 이벤트를 묶어야 한다. `user_id`는 nullable로 뒀다. 로그인하지 않은 상태에서도 세션 기반으로 추적하고 싶었기 때문이다.
+별도 라이브러리 추가 없이 Spring Boot Starter WebSocket이 이미 있으니까 그걸로 충분했다.
 
 ---
 
-데이터 레이어는 이 프로젝트의 표준 패턴을 그대로 따랐다. 서비스가 JpaRepository를 직접 보지 않고, 포트 인터페이스를 통한다.
+이벤트를 어디 두느냐가 구조 문제였다. 처음에는 `com.example.demo.graphql.subscription` 패키지에 `ApplicationSubscriptionService`를 뒀다. 그랬더니 ArchUnit `noCyclicDependencies` 테스트가 터졌다.
 
-```kotlin
-interface UserEventStore {
-    fun save(event: UserEvent): UserEvent
-    fun countSessionsByEventTypeSince(since: LocalDateTime): Map<String, Long>
-    fun countDistinctSessionsByEventTypeSince(eventType: String, since: LocalDateTime): Long
-}
+```
+Cycle detected: Slice graphql → Slice service → Slice graphql
 ```
 
-JPA 어댑터는 JPQL 집계 쿼리를 쓴다.
+`JobApplicationService`(service 슬라이스)가 `ApplicationSubscriptionService`(graphql 슬라이스)를 의존하고, `graphql` 슬라이스는 `service` 슬라이스를 의존하니까 순환이다. 해결책은 단순했다. `ApplicationSubscriptionService`와 이벤트 클래스를 `com.example.demo.notification` 패키지로 빼는 것. `service`가 `notification`을 참조하고, `graphql`도 `notification`을 참조하면 순환이 없다.
 
 ```kotlin
-@Query("""
-    SELECT u.eventType, COUNT(DISTINCT u.sessionId)
-    FROM UserEvent u
-    WHERE u.occurredAt >= :since
-    GROUP BY u.eventType
-""")
-fun countSessionsByEventTypeSince(since: LocalDateTime): List<Array<Any>>
-```
-
-`COUNT(DISTINCT u.sessionId)`로 유니크 세션을 센다. 한 세션에서 같은 이력서를 두 번 조회해도 1로 카운트된다. 이게 퍼널 분석에서 맞는 방식이다. 단순 이벤트 수가 아니라 "몇 명이 이 단계를 거쳤나"를 측정해야 하니까.
-
----
-
-집계 로직은 서비스에서 처리한다.
-
-```kotlin
+// com.example.demo.notification
 @Service
-class FunnelAnalysisService(private val store: UserEventStore) {
+class ApplicationSubscriptionService {
 
-    companion object {
-        val FUNNEL_STEPS = listOf(
-            "RESUME_VIEW",
-            "RESUME_SAVE",
-            "RESUME_DOWNLOAD"
-        )
+    private val sink: Sinks.Many<ApplicationStatusChangedEvent> =
+        Sinks.many().multicast().onBackpressureBuffer()
+
+    fun publish(event: ApplicationStatusChangedEvent) {
+        sink.tryEmitNext(event)
     }
 
-    fun getFunnelStats(periodHours: Int = 24): FunnelStats {
-        val since = LocalDateTime.now().minusHours(periodHours.toLong())
-        val countsByType = store.countSessionsByEventTypeSince(since)
-
-        val topCount = FUNNEL_STEPS.firstOrNull()
-            ?.let { countsByType[it] ?: 0L }
-            ?: 0L
-
-        val steps = FUNNEL_STEPS.map { eventType ->
-            val count = countsByType[eventType] ?: 0L
-            FunnelStep(
-                eventType = eventType,
-                sessionCount = count,
-                conversionRate = if (topCount == 0L) 0.0
-                    else Math.round(count.toDouble() / topCount * 1000) / 10.0
-            )
-        }
-
-        return FunnelStats(steps = steps, totalSessions = topCount, periodHours = periodHours)
-    }
+    fun statusChangesForUser(userId: Long): Flux<ApplicationStatusChangedEvent> =
+        sink.asFlux().filter { it.userId == userId }
 }
 ```
 
-전환율 계산에서 소수점 처리를 `Math.round(x * 1000) / 10.0`으로 했다. 부동소수점 오차로 50.00000000001 같은 값이 나오지 않도록. 별거 아닌 것 같아도 UI에 표시될 때 이런 숫자가 나오면 지저분하다.
+`Sinks.many().multicast().onBackpressureBuffer()`를 선택한 이유가 있다. `unicast()`는 구독자가 하나여야 하고, `replay()`는 과거 이벤트를 새 구독자에게 재전송한다. 실시간 알림은 현재 연결된 사용자에게만 그 시점 이후 이벤트를 보내면 되니까 `multicast()`가 맞다.
 
 ---
 
-테스트는 `FakeUserEventStore`로 작성했다. Spring Context가 필요 없어서 빠르게 돈다.
+Subscription 컨트롤러는 간단하다.
 
 ```kotlin
-class FakeUserEventStore : UserEventStore {
-    val saved = mutableListOf<UserEvent>()
-    val sessionCounts = mutableMapOf<String, Long>()
-    private var idSeq = 1L
+@Controller
+class ApplicationSubscriptionController(
+    private val subscriptionService: ApplicationSubscriptionService,
+    private val userRepository: UserRepository
+) {
 
-    override fun save(event: UserEvent) = event.copy(id = idSeq++).also { saved.add(it) }
-    override fun countSessionsByEventTypeSince(since: LocalDateTime) = sessionCounts.toMap()
-    override fun countDistinctSessionsByEventTypeSince(eventType: String, since: LocalDateTime) =
-        sessionCounts[eventType] ?: 0L
+    @SubscriptionMapping
+    fun applicationStatusChanged(
+        @AuthenticationPrincipal userDetails: UserDetails
+    ): Flux<ApplicationStatusChangedEvent> {
+        val user = userRepository.findByUsername(userDetails.username)
+            .orElseThrow { IllegalArgumentException("User not found") }
+        return subscriptionService.statusChangesForUser(user.id!!)
+    }
 }
 ```
 
-전환율 계산이 맞는지 확인하는 테스트가 핵심이다.
+`statusChangesForUser(userId)`가 Flux를 필터링해서 반환한다. 연결한 사용자의 이벤트만 흘러간다. 다른 사용자의 상태 변경은 필터에서 걸린다.
+
+스키마는 `Subscription` 타입을 추가했다.
+
+```graphql
+type Subscription {
+    applicationStatusChanged: ApplicationStatusChangedEvent!
+}
+
+type ApplicationStatusChangedEvent {
+    applicationId: ID!
+    companyName: String!
+    position: String!
+    newStatus: JobApplicationStatus!
+    userId: ID!
+    timestamp: Long!
+}
+```
+
+이벤트 발행은 `JobApplicationService.changeStatus()` 끝에 붙였다. 이미 webhook 발송이 있었는데 그 바로 다음에 추가했다.
+
+```kotlin
+// 7. Publish GraphQL Subscription event
+subscriptionService.publish(
+    ApplicationStatusChangedEvent(
+        applicationId = savedApplication.id!!,
+        companyName = savedApplication.companyName,
+        position = savedApplication.position,
+        newStatus = savedApplication.status,
+        userId = userId
+    )
+)
+```
+
+STOMP, webhook, Subscription 세 경로로 동시에 나간다. 클라이언트가 어떤 방식으로 연결하든 알림을 받을 수 있다.
+
+---
+
+테스트는 `StepVerifier`로 작성했다. `reactor-test` 의존성이 없었다.
+
+```groovy
+testImplementation 'io.projectreactor:reactor-test'
+```
+
+추가하고 나서 세 가지를 검증했다.
 
 ```kotlin
 @Test
-fun `getFunnelStats returns steps with correct conversion rates`() {
-    store.sessionCounts["RESUME_VIEW"] = 10L
-    store.sessionCounts["RESUME_SAVE"] = 5L
-    store.sessionCounts["RESUME_DOWNLOAD"] = 2L
+fun `statusChanges emits published events`() {
+    val event = ApplicationStatusChangedEvent(
+        applicationId = 1L, companyName = "TestCorp", position = "Backend Dev",
+        newStatus = JobApplicationStatus.INTERVIEW, userId = 42L
+    )
 
-    val stats = service.getFunnelStats(24)
+    val flux = service.statusChanges()
 
-    assertEquals(100.0, stats.steps[0].conversionRate)  // 기준
-    assertEquals(50.0, stats.steps[1].conversionRate)   // 5/10
-    assertEquals(20.0, stats.steps[2].conversionRate)   // 2/10
+    StepVerifier.create(flux.take(1))
+        .then { service.publish(event) }
+        .expectNextMatches { e -> e.applicationId == 1L && e.companyName == "TestCorp" }
+        .verifyComplete()
+}
+
+@Test
+fun `statusChangesForUser filters events by userId`() {
+    // userId 99의 이벤트는 통과하지 않고, 42의 이벤트만 도달한다
+}
+
+@Test
+fun `statusChangesForUser does not emit events for other users`() {
+    // 200ms timeout으로 다른 유저 이벤트가 절대 안 온다는 걸 검증
 }
 ```
 
----
-
-API는 두 개다.
-
-```
-POST /api/funnel/events   → 이벤트 기록
-GET  /api/funnel/stats    → 퍼널 통계 (periodHours 파라미터)
-```
-
-`periodHours`는 기본값 24. 6시간, 24시간, 48시간, 7일 단위로 필터링할 수 있다.
-
-프론트엔드는 `/admin/funnel`에 붙였다. 퍼널 단계별 바 차트를 그리는데, 막대 너비는 최대값 기준 상대값으로 계산한다. 절대 수치를 그대로 픽셀로 쓰면 데이터가 적을 때 막대가 거의 안 보인다.
-
-```tsx
-const widthPct = maxCount === 0 ? 0 : (step.sessionCount / maxCount) * 100;
-```
-
-단계 사이에 이탈 수도 표시한다. "조회 10명 중 5명 저장 → 5명 이탈"처럼. 이게 있어야 어느 단계에서 막히는지 바로 보인다.
+마지막 테스트가 포인트다. 필터가 제대로 동작하는지는 "이벤트가 오지 않는다"를 검증해야 한다. `timeout(Duration.ofMillis(300))`으로 TimeoutException을 기대했다.
 
 ---
 
-구현하면서 확인한 것 하나. JPQL에서 `COUNT(DISTINCT)`와 `GROUP BY`를 함께 쓸 때 반환 타입이 `List<Array<Any>>`다. `List<Pair<String, Long>>` 같은 타입으로 매핑이 안 된다. 인터페이스 선언을 `List<Array<Any>>`로 박아두고 어댑터에서 변환하는 게 맞다.
+`JobApplicationServiceTest`도 하나 고쳤다. `@InjectMocks`가 생성자 파라미터를 전부 주입하려다가 `subscriptionService`가 없어서 NPE가 났다. `@Mock`만 추가하면 됐다.
 
 ```kotlin
-override fun countSessionsByEventTypeSince(since: LocalDateTime): Map<String, Long> =
-    repo.countSessionsByEventTypeSince(since)
-        .associate { row -> row[0] as String to row[1] as Long }
+@Mock private lateinit var subscriptionService: ApplicationSubscriptionService
 ```
 
-`row[0]`이 String, `row[1]`이 Long인 걸 런타임에 캐스팅한다. 좀 불안하지만 JPQL GROUP BY 결과에서 타입 순서는 쿼리 작성 순서와 일치하니까 실용적으로는 문제없다.
+---
+
+실제로 WebSocket 연결이 어떻게 동작하는지 보려고 프론트엔드에 `/admin/graphql-subscription` 페이지도 만들었다. `graphql-transport-ws` 프로토콜 핸드셰이크 순서가 있다.
+
+1. `connection_init` 전송 (Authorization 헤더 포함)
+2. `connection_ack` 수신 확인
+3. `subscribe` 메시지 전송
+4. 서버에서 `next` 메시지로 이벤트 수신
+
+이 순서가 맞아야 연결이 된다. `connection_ack` 없이 바로 `subscribe`를 보내면 서버가 무시한다.
+
+```typescript
+ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'connection_ack') {
+        ws.send(JSON.stringify({
+            id: '1',
+            type: 'subscribe',
+            payload: { query: SUBSCRIPTION_QUERY }
+        }));
+    } else if (msg.type === 'next') {
+        const event = msg.payload?.data?.applicationStatusChanged;
+        if (event) setEvents(prev => [event, ...prev.slice(0, 99)]);
+    }
+};
+```
+
+연결 로그를 화면에 표시해뒀다. 실제로 `changeApplicationStatus` GraphQL mutation을 날리면 0ms 지연 없이 이벤트가 수신된다. 폴링 5초 대기가 없다는 게 확실히 느껴진다.
+
+---
+
+이번 구현에서 배운 것 하나. ArchUnit 순환 의존 검사는 패키지 설계를 강제한다. 처음에 편한 위치에 파일을 뒀다가 테스트가 터졌고, 그게 오히려 `notification` 패키지를 독립적으로 분리하는 계기가 됐다. 테스트가 설계를 개선시킨 케이스다.
