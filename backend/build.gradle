@@ -184,6 +184,9 @@ dependencies {
 
     // API Breaking Change Detection: openapi-diff for schema version comparison
     implementation 'org.openapitools.openapidiff:openapi-diff-core:2.1.0'
+
+    // Reactor Test: StepVerifier for GraphQL Subscription Flux testing
+    testImplementation 'io.projectreactor:reactor-test'
 }
 
 tasks.named('test') {

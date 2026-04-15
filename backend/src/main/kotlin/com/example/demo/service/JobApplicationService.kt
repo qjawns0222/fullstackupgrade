@@ -5,6 +5,8 @@ import com.example.demo.audit.AuditLog
 import com.example.demo.dto.JobApplicationRequest
 import com.example.demo.dto.JobApplicationResponse
 import com.example.demo.entity.JobApplication
+import com.example.demo.notification.ApplicationStatusChangedEvent
+import com.example.demo.notification.ApplicationSubscriptionService
 import com.example.demo.repository.JobApplicationRepository
 import com.example.demo.repository.UserRepository
 import com.example.demo.state.JobApplicationEvent
@@ -27,7 +29,8 @@ class JobApplicationService(
         private val stateMachineFactory:
                 StateMachineFactory<JobApplicationState, JobApplicationEvent>,
         private val persister: StateMachinePersister<JobApplicationState, JobApplicationEvent, String>,
-        private val webhookDeliveryService: WebhookDeliveryService
+        private val webhookDeliveryService: WebhookDeliveryService,
+        private val subscriptionService: ApplicationSubscriptionService
 ) {
 
     @Transactional(readOnly = true)
@@ -188,6 +191,17 @@ class JobApplicationService(
                     "newStatus" to newState.name,
                     "event" to event.name
                 ),
+                userId = userId
+            )
+        )
+
+        // 7. Publish GraphQL Subscription event
+        subscriptionService.publish(
+            ApplicationStatusChangedEvent(
+                applicationId = savedApplication.id!!,
+                companyName = savedApplication.companyName,
+                position = savedApplication.position,
+                newStatus = savedApplication.status,
                 userId = userId
             )
         )

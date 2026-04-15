@@ -17,3 +17,16 @@ type Mutation {
     deleteApplication(id: ID!): Boolean!
     changeApplicationStatus(id: ID!, event: JobApplicationEvent!): JobApplication!
 }
+
+type Subscription {
+    applicationStatusChanged: ApplicationStatusChangedEvent!
+}
+
+type ApplicationStatusChangedEvent {
+    applicationId: ID!
+    companyName: String!
+    position: String!
+    newStatus: JobApplicationStatus!
+    userId: ID!
+    timestamp: Long!
+}

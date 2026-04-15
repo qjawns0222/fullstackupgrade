@@ -4,6 +4,7 @@ import com.example.demo.dto.JobApplicationRequest
 import com.example.demo.entity.JobApplication
 import com.example.demo.entity.JobApplicationStatus
 import com.example.demo.entity.User
+import com.example.demo.notification.ApplicationSubscriptionService
 import com.example.demo.repository.JobApplicationRepository
 import com.example.demo.repository.UserRepository
 import com.example.demo.webhook.WebhookDeliveryService
@@ -41,6 +42,8 @@ class JobApplicationServiceTest {
                         String>
 
         @Mock private lateinit var webhookDeliveryService: WebhookDeliveryService
+
+        @Mock private lateinit var subscriptionService: ApplicationSubscriptionService
 
         @InjectMocks private lateinit var jobApplicationService: JobApplicationService
 

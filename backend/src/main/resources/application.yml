@@ -12,6 +12,8 @@ spring:
     schema:
       locations: classpath:graphql/
       file-extensions: .graphqls
+    websocket:
+      path: /graphql-ws
   
 
   data:
