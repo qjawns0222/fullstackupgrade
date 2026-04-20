@@ -1,189 +1,114 @@
-[Fullstack] GraphQL Subscription 실시간 알림 - graphql-transport-ws로 폴링 없애기
+[Fullstack] Circuit Breaker 상태 기반 적응형 Rate Limiting - 장애 전파를 막는 동적 정책 교체
 
 ---
 
-WebSocket STOMP 알림은 이미 있었다. 분석 진행 상태, 배치 잡 완료, Redis pub/sub 메시지까지 `/topic/notifications`로 잘 날아오고 있었다. 그런데 GraphQL 레이어에서는 아무것도 없었다. 클라이언트가 지원서 상태 변경을 알려면 5초마다 `myApplications` 쿼리를 폴링하거나, STOMP 연결을 별도로 유지해야 했다.
+Rate Limiting은 보통 "얼마나 자주 호출할 수 있나"를 고정된 숫자로 표현한다. 분당 20회, 초당 5회. 그런데 이 숫자가 외부 서비스가 죽어가는 상황에서도 그대로 유지된다면 어떻게 될까?
 
-GraphQL 클라이언트를 쓰는 입장에서 이건 어색하다. GraphQL을 선택한 이유 중 하나가 "단일 인터페이스"인데, 폴링이나 STOMP를 따로 붙이면 그 이점이 반감된다. GraphQL Subscription을 도입해서 상태 변경을 GraphQL 프로토콜로 스트리밍하기로 했다.
+Elasticsearch가 응답을 멈추고 Circuit Breaker가 OPEN 상태로 전환됐다. 그런데 Rate Limit은 여전히 분당 20회를 허용하고 있다. 트래픽은 계속 들어오고, 각 요청은 fallback을 타거나 타임아웃을 기다리며 쌓인다. CB가 장애를 감지했음에도 Rate Limit이 제동을 걸지 않으니 장애가 확산된다. 이게 내가 풀고 싶었던 문제였다.
 
----
+Resilience4j의 CircuitBreaker가 이미 `s3Service`, `ocrService` 두 인스턴스에 붙어 있었다. 상태 변화 이벤트를 발행하는 `EventPublisher`도 있었다. Bucket4j는 이미 Redis ProxyManager로 분산 버킷을 운영 중이었다. 두 라이브러리를 연결하는 게 핵심이었다.
 
-Spring for GraphQL 1.2.4가 이미 의존성에 있었다. `@SubscriptionMapping` 어노테이션도 있고, Flux를 반환하면 된다는 건 알고 있었다. 문제는 전송 계층이었다.
-
-WebSocket을 활성화하는 방법이 두 가지다. `graphql-ws` 라이브러리가 쓰는 `graphql-transport-ws` 프로토콜과, 구버전 `subscriptions-transport-ws` 프로토콜. Spring for GraphQL은 `graphql-transport-ws`를 기본으로 지원한다. `application.yml`에 경로만 추가하면 된다.
-
-```yaml
-spring:
-  graphql:
-    websocket:
-      path: /graphql-ws
-```
-
-별도 라이브러리 추가 없이 Spring Boot Starter WebSocket이 이미 있으니까 그걸로 충분했다.
-
----
-
-이벤트를 어디 두느냐가 구조 문제였다. 처음에는 `com.example.demo.graphql.subscription` 패키지에 `ApplicationSubscriptionService`를 뒀다. 그랬더니 ArchUnit `noCyclicDependencies` 테스트가 터졌다.
-
-```
-Cycle detected: Slice graphql → Slice service → Slice graphql
-```
-
-`JobApplicationService`(service 슬라이스)가 `ApplicationSubscriptionService`(graphql 슬라이스)를 의존하고, `graphql` 슬라이스는 `service` 슬라이스를 의존하니까 순환이다. 해결책은 단순했다. `ApplicationSubscriptionService`와 이벤트 클래스를 `com.example.demo.notification` 패키지로 빼는 것. `service`가 `notification`을 참조하고, `graphql`도 `notification`을 참조하면 순환이 없다.
+먼저 정책을 모델링했다.
 
 ```kotlin
-// com.example.demo.notification
-@Service
-class ApplicationSubscriptionService {
-
-    private val sink: Sinks.Many<ApplicationStatusChangedEvent> =
-        Sinks.many().multicast().onBackpressureBuffer()
-
-    fun publish(event: ApplicationStatusChangedEvent) {
-        sink.tryEmitNext(event)
-    }
-
-    fun statusChangesForUser(userId: Long): Flux<ApplicationStatusChangedEvent> =
-        sink.asFlux().filter { it.userId == userId }
-}
-```
-
-`Sinks.many().multicast().onBackpressureBuffer()`를 선택한 이유가 있다. `unicast()`는 구독자가 하나여야 하고, `replay()`는 과거 이벤트를 새 구독자에게 재전송한다. 실시간 알림은 현재 연결된 사용자에게만 그 시점 이후 이벤트를 보내면 되니까 `multicast()`가 맞다.
-
----
-
-Subscription 컨트롤러는 간단하다.
-
-```kotlin
-@Controller
-class ApplicationSubscriptionController(
-    private val subscriptionService: ApplicationSubscriptionService,
-    private val userRepository: UserRepository
+sealed class AdaptiveRateLimitPolicy(
+    val capacity: Long,
+    val refillTokens: Long,
+    val refillPeriod: Duration,
 ) {
+    data object Closed   : AdaptiveRateLimitPolicy(20, 20, Duration.ofMinutes(1))
+    data object HalfOpen : AdaptiveRateLimitPolicy(5,  5,  Duration.ofMinutes(1))
+    data object Open     : AdaptiveRateLimitPolicy(1,  1,  Duration.ofMinutes(1))
 
-    @SubscriptionMapping
-    fun applicationStatusChanged(
-        @AuthenticationPrincipal userDetails: UserDetails
-    ): Flux<ApplicationStatusChangedEvent> {
-        val user = userRepository.findByUsername(userDetails.username)
-            .orElseThrow { IllegalArgumentException("User not found") }
-        return subscriptionService.statusChangesForUser(user.id!!)
+    fun toBucketConfiguration(): BucketConfiguration =
+        BucketConfiguration.builder()
+            .addLimit(
+                Bandwidth.builder()
+                    .capacity(capacity)
+                    .refillGreedy(refillTokens, refillPeriod)
+                    .build()
+            )
+            .build()
+}
+```
+
+CLOSED는 평상시 20/min, HALF_OPEN은 회복 탐색 중이니 5/min으로 조심하고, OPEN은 사실상 차단에 가까운 1/min. 숫자는 팀 상황에 따라 튜닝할 수 있지만, 방향성은 이게 맞다고 생각한다.
+
+그 다음은 이벤트 구독이다. CB의 `getEventPublisher().onStateTransition()` 메서드로 상태 전환 이벤트를 받을 수 있다. 여기서 API를 실제로 JAR에서 확인했는데, `StateTransition` enum의 `toState` 필드가 Kotlin에서 `getToState()` → `.toState` 프로퍼티로 자동 변환된다는 걸 확인했다.
+
+```kotlin
+@Service
+class AdaptiveRateLimitService(
+    private val proxyManager: ProxyManager<ByteArray>,
+) {
+    private val currentPolicies = ConcurrentHashMap<String, AdaptiveRateLimitPolicy>()
+
+    fun registerCircuitBreaker(cb: CircuitBreaker) {
+        cb.eventPublisher.onStateTransition { event ->
+            val newPolicy = when (event.stateTransition.toState) {
+                CircuitBreaker.State.OPEN      -> AdaptiveRateLimitPolicy.Open
+                CircuitBreaker.State.HALF_OPEN -> AdaptiveRateLimitPolicy.HalfOpen
+                CircuitBreaker.State.CLOSED    -> AdaptiveRateLimitPolicy.Closed
+                else -> return@onStateTransition
+            }
+            currentPolicies[cb.name] = newPolicy
+            log.warn("[AdaptiveRateLimit] CB '{}' → {} : {} req/min",
+                cb.name, event.stateTransition.toState, newPolicy.capacity)
+        }
+    }
+
+    fun resolveBucket(cbName: String, bucketKey: String) =
+        proxyManager.builder().build(
+            bucketKey.toByteArray(Charsets.UTF_8),
+            currentPolicyFor(cbName).toBucketConfiguration(),
+        )
+}
+```
+
+`ConcurrentHashMap`으로 CB 이름 → 현재 정책을 관리한다. 이벤트가 오면 맵을 교체하고, `resolveBucket` 호출 시 현재 맵에서 정책을 꺼내 `BucketConfiguration`을 생성한다. Bucket4j의 Redis ProxyManager는 `build(key, BucketConfiguration)` 오버로드를 지원하니 직접 전달하면 된다.
+
+리스너 등록은 `ApplicationReadyEvent`에서 처리했다. `CircuitBreakerRegistry.getAllCircuitBreakers()`로 등록된 모든 CB를 가져와 일괄 등록한다.
+
+```kotlin
+@Component
+class CircuitBreakerEventListenerConfig(
+    private val circuitBreakerRegistry: CircuitBreakerRegistry,
+    private val adaptiveRateLimitService: AdaptiveRateLimitService,
+) {
+    @EventListener(ApplicationReadyEvent::class)
+    fun registerListeners() {
+        circuitBreakerRegistry.allCircuitBreakers.forEach { cb ->
+            adaptiveRateLimitService.registerCircuitBreaker(cb)
+        }
     }
 }
 ```
 
-`statusChangesForUser(userId)`가 Flux를 필터링해서 반환한다. 연결한 사용자의 이벤트만 흘러간다. 다른 사용자의 상태 변경은 필터에서 걸린다.
+테스트에서 한 가지 함정이 있었다. Mockito의 `@ExtendWith(MockitoExtension::class)`는 strict stubbing을 적용하는데, `@BeforeEach`에서 `proxyManager.builder()` stub을 잡아두면 해당 stub을 사용하지 않는 테스트에서 `UnnecessaryStubbingException`이 난다. 그래서 ProxyManager stub은 `resolveBucket`을 직접 검증하는 테스트 메서드 안으로 이동했다.
 
-스키마는 `Subscription` 타입을 추가했다.
+또 `bucketBuilder.build(any(), any<Supplier<BucketConfiguration>>())`로 stub하면 실제 코드가 `build(ByteArray, BucketConfiguration)` 오버로드를 호출할 때 타입이 안 맞아 `PotentialStubbingProblem`이 발생한다. `any(BucketConfiguration::class.java)`로 명시해야 정확히 매칭된다.
 
-```graphql
-type Subscription {
-    applicationStatusChanged: ApplicationStatusChangedEvent!
-}
-
-type ApplicationStatusChangedEvent {
-    applicationId: ID!
-    companyName: String!
-    position: String!
-    newStatus: JobApplicationStatus!
-    userId: ID!
-    timestamp: Long!
-}
-```
-
-이벤트 발행은 `JobApplicationService.changeStatus()` 끝에 붙였다. 이미 webhook 발송이 있었는데 그 바로 다음에 추가했다.
-
-```kotlin
-// 7. Publish GraphQL Subscription event
-subscriptionService.publish(
-    ApplicationStatusChangedEvent(
-        applicationId = savedApplication.id!!,
-        companyName = savedApplication.companyName,
-        position = savedApplication.position,
-        newStatus = savedApplication.status,
-        userId = userId
-    )
-)
-```
-
-STOMP, webhook, Subscription 세 경로로 동시에 나간다. 클라이언트가 어떤 방식으로 연결하든 알림을 받을 수 있다.
-
----
-
-테스트는 `StepVerifier`로 작성했다. `reactor-test` 의존성이 없었다.
-
-```groovy
-testImplementation 'io.projectreactor:reactor-test'
-```
-
-추가하고 나서 세 가지를 검증했다.
+실제 CB 상태 전환 테스트는 `CircuitBreakerRegistry.of(CircuitBreakerConfig.ofDefaults()).circuitBreaker(name)`으로 실제 CB 인스턴스를 만들고 `transitionToOpenState()`, `transitionToHalfOpenState()`, `transitionToClosedState()`를 직접 호출했다. 이렇게 하면 실제 이벤트가 발행되고 리스너가 트리거된다.
 
 ```kotlin
 @Test
-fun `statusChanges emits published events`() {
-    val event = ApplicationStatusChangedEvent(
-        applicationId = 1L, companyName = "TestCorp", position = "Backend Dev",
-        newStatus = JobApplicationStatus.INTERVIEW, userId = 42L
-    )
+fun `CB가 OPEN → HALF_OPEN → CLOSED 순으로 전환되면 정책이 순서대로 바뀐다`() {
+    val cb = createCircuitBreaker("testCb3")
+    service.registerCircuitBreaker(cb)
 
-    val flux = service.statusChanges()
+    cb.transitionToOpenState()
+    assertEquals(AdaptiveRateLimitPolicy.Open, service.currentPolicyFor("testCb3"))
 
-    StepVerifier.create(flux.take(1))
-        .then { service.publish(event) }
-        .expectNextMatches { e -> e.applicationId == 1L && e.companyName == "TestCorp" }
-        .verifyComplete()
-}
+    cb.transitionToHalfOpenState()
+    assertEquals(AdaptiveRateLimitPolicy.HalfOpen, service.currentPolicyFor("testCb3"))
 
-@Test
-fun `statusChangesForUser filters events by userId`() {
-    // userId 99의 이벤트는 통과하지 않고, 42의 이벤트만 도달한다
-}
-
-@Test
-fun `statusChangesForUser does not emit events for other users`() {
-    // 200ms timeout으로 다른 유저 이벤트가 절대 안 온다는 걸 검증
+    cb.transitionToClosedState()
+    assertEquals(AdaptiveRateLimitPolicy.Closed, service.currentPolicyFor("testCb3"))
 }
 ```
 
-마지막 테스트가 포인트다. 필터가 제대로 동작하는지는 "이벤트가 오지 않는다"를 검증해야 한다. `timeout(Duration.ofMillis(300))`으로 TimeoutException을 기대했다.
+모니터링 API도 추가했다. `GET /api/adaptive-rate-limit/status`를 치면 등록된 모든 CB의 현재 상태, 적용 중인 정책, 실패율, 버퍼 호출 수를 JSON으로 반환한다. 프론트엔드에서 3초 polling으로 보여준다.
 
----
+이 패턴의 의미는 Circuit Breaker와 Rate Limiter를 독립적인 방어선으로 두는 게 아니라 연동하는 것이다. CB가 문제를 감지하면 Rate Limiter가 즉각 제동을 건다. CB가 회복하면 Rate Limiter도 조심스럽게 열린다. 두 레이어가 같은 신호를 보고 움직이는 게 훨씬 자연스럽다.
 
-`JobApplicationServiceTest`도 하나 고쳤다. `@InjectMocks`가 생성자 파라미터를 전부 주입하려다가 `subscriptionService`가 없어서 NPE가 났다. `@Mock`만 추가하면 됐다.
-
-```kotlin
-@Mock private lateinit var subscriptionService: ApplicationSubscriptionService
-```
-
----
-
-실제로 WebSocket 연결이 어떻게 동작하는지 보려고 프론트엔드에 `/admin/graphql-subscription` 페이지도 만들었다. `graphql-transport-ws` 프로토콜 핸드셰이크 순서가 있다.
-
-1. `connection_init` 전송 (Authorization 헤더 포함)
-2. `connection_ack` 수신 확인
-3. `subscribe` 메시지 전송
-4. 서버에서 `next` 메시지로 이벤트 수신
-
-이 순서가 맞아야 연결이 된다. `connection_ack` 없이 바로 `subscribe`를 보내면 서버가 무시한다.
-
-```typescript
-ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
-    if (msg.type === 'connection_ack') {
-        ws.send(JSON.stringify({
-            id: '1',
-            type: 'subscribe',
-            payload: { query: SUBSCRIPTION_QUERY }
-        }));
-    } else if (msg.type === 'next') {
-        const event = msg.payload?.data?.applicationStatusChanged;
-        if (event) setEvents(prev => [event, ...prev.slice(0, 99)]);
-    }
-};
-```
-
-연결 로그를 화면에 표시해뒀다. 실제로 `changeApplicationStatus` GraphQL mutation을 날리면 0ms 지연 없이 이벤트가 수신된다. 폴링 5초 대기가 없다는 게 확실히 느껴진다.
-
----
-
-이번 구현에서 배운 것 하나. ArchUnit 순환 의존 검사는 패키지 설계를 강제한다. 처음에 편한 위치에 파일을 뒀다가 테스트가 터졌고, 그게 오히려 `notification` 패키지를 독립적으로 분리하는 계기가 됐다. 테스트가 설계를 개선시킨 케이스다.
+한 가지 아쉬운 점은 Rate Limit 정책이 전역적이라는 것이다. 같은 CB 이름이면 모든 클라이언트 IP에 동일한 정책이 적용된다. 사용자별로 다른 정책을 주고 싶다면 `resolveBucket(cbName, userKey)`에서 bucketKey를 조합해 개별 버킷을 만들면 된다. 그건 다음 단계다.

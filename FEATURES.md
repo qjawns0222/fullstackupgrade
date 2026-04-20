@@ -31,6 +31,12 @@
 - Guava BloomFilter 기반 토큰 블랙리스트 (Redis 전 인메모리 사전 필터)
 - OWASP HTML Sanitizer XSS 방어 (policy-based: plain/rich/resume 3종)
 - Rate Limiting — Bucket4j + Redis 분산 버킷 (annotation + interceptor)
+- Circuit Breaker 상태 기반 적응형 Rate Limiting
+  - AdaptiveRateLimitPolicy sealed class: CLOSED(20/min) / HALF_OPEN(5/min) / OPEN(1/min)
+  - AdaptiveRateLimitService: CircuitBreaker.EventPublisher 구독 → ConcurrentHashMap 정책 동적 교체
+  - CircuitBreakerEventListenerConfig: ApplicationReadyEvent 시 모든 CB에 리스너 자동 등록
+  - GET /api/adaptive-rate-limit/status: CB별 상태·정책·실패율 모니터링 API
+  - 프론트엔드: /admin/adaptive-rate-limit 대시보드 (3초 polling, CB 상태 카드)
 - Idempotency Key — Redis 기반 중복 요청 차단 (@Idempotent AOP)
 - 필드 레벨 암호화 + 키 로테이션 (Google Tink AES-256-GCM)
   - TinkConfig: 키셋을 Redis에 저장, 앱 기동 시 자동 생성/로딩
