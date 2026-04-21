@@ -1,114 +1,102 @@
-[Fullstack] Circuit Breaker 상태 기반 적응형 Rate Limiting - 장애 전파를 막는 동적 정책 교체
+[Fullstack] 이벤트 소싱 감사 추적 - 도메인 이벤트를 append-only로 저장하고 시점 재현하기
 
 ---
 
-Rate Limiting은 보통 "얼마나 자주 호출할 수 있나"를 고정된 숫자로 표현한다. 분당 20회, 초당 5회. 그런데 이 숫자가 외부 서비스가 죽어가는 상황에서도 그대로 유지된다면 어떻게 될까?
+감사 로그는 이미 있었다. RabbitMQ → Elasticsearch로 흘러가는 파이프라인도 있고, AuditLogAspect가 메서드마다 현재 상태를 찍어주고 있었다. 그런데 어느 날 "이 이력서가 사흘 전 상태로 어떻게 생겼었는지 볼 수 있나요?"라는 질문을 받고 막혔다. 현재 상태는 알 수 있지만, 특정 시점의 상태를 재현하는 건 불가능했다.
 
-Elasticsearch가 응답을 멈추고 Circuit Breaker가 OPEN 상태로 전환됐다. 그런데 Rate Limit은 여전히 분당 20회를 허용하고 있다. 트래픽은 계속 들어오고, 각 요청은 fallback을 타거나 타임아웃을 기다리며 쌓인다. CB가 장애를 감지했음에도 Rate Limit이 제동을 걸지 않으니 장애가 확산된다. 이게 내가 풀고 싶었던 문제였다.
+이게 이벤트 소싱을 도입하고 싶었던 이유다. 상태를 덮어쓰는 게 아니라 "무슨 일이 일어났는가"를 순서대로 쌓는 것. 그러면 임의의 시점까지 이벤트를 재생해서 그 시점 상태를 복원할 수 있다.
 
-Resilience4j의 CircuitBreaker가 이미 `s3Service`, `ocrService` 두 인스턴스에 붙어 있었다. 상태 변화 이벤트를 발행하는 `EventPublisher`도 있었다. Bucket4j는 이미 Redis ProxyManager로 분산 버킷을 운영 중이었다. 두 라이브러리를 연결하는 게 핵심이었다.
+Axon Framework도 검토했다. 근데 프로젝트 규모에 비해 너무 무겁다. EventStore, EventBus, CommandBus, Aggregate 어노테이션... 기존 JPA 코드를 대거 바꿔야 한다. 우리가 필요한 건 이벤트를 시계열로 저장하고 조회하는 것 뿐이다. Flyway 마이그레이션 하나와 JPA 엔티티 하나로 시작했다.
 
-먼저 정책을 모델링했다.
+```sql
+CREATE TABLE domain_events (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    aggregate_type VARCHAR(100) NOT NULL,
+    aggregate_id   VARCHAR(100) NOT NULL,
+    event_type     VARCHAR(100) NOT NULL,
+    event_payload  TEXT NOT NULL,
+    actor          VARCHAR(100),
+    occurred_at    DATETIME(6) NOT NULL
+);
+CREATE INDEX idx_domain_events_aggregate ON domain_events (aggregate_type, aggregate_id);
+```
+
+`aggregate_type`은 "Resume", "JobApplication" 같은 도메인 개념이고, `aggregate_id`는 해당 엔티티의 PK다. `event_payload`는 JSON 문자열로 자유롭게 담는다. 스키마를 강제하지 않는 대신 유연성을 얻었다.
+
+포트 인터페이스는 얇게 유지했다.
 
 ```kotlin
-sealed class AdaptiveRateLimitPolicy(
-    val capacity: Long,
-    val refillTokens: Long,
-    val refillPeriod: Duration,
-) {
-    data object Closed   : AdaptiveRateLimitPolicy(20, 20, Duration.ofMinutes(1))
-    data object HalfOpen : AdaptiveRateLimitPolicy(5,  5,  Duration.ofMinutes(1))
-    data object Open     : AdaptiveRateLimitPolicy(1,  1,  Duration.ofMinutes(1))
-
-    fun toBucketConfiguration(): BucketConfiguration =
-        BucketConfiguration.builder()
-            .addLimit(
-                Bandwidth.builder()
-                    .capacity(capacity)
-                    .refillGreedy(refillTokens, refillPeriod)
-                    .build()
-            )
-            .build()
+interface DomainEventStore {
+    fun append(event: DomainEvent): DomainEvent
+    fun findByAggregate(aggregateType: String, aggregateId: String): List<DomainEvent>
+    fun findRecent(limit: Int): List<DomainEvent>
+    fun findByAggregateTypeAndPeriod(aggregateType: String, from: LocalDateTime, to: LocalDateTime): List<DomainEvent>
+    fun stats(): DomainEventStats
 }
 ```
 
-CLOSED는 평상시 20/min, HALF_OPEN은 회복 탐색 중이니 5/min으로 조심하고, OPEN은 사실상 차단에 가까운 1/min. 숫자는 팀 상황에 따라 튜닝할 수 있지만, 방향성은 이게 맞다고 생각한다.
+서비스가 JpaRepository를 직접 알 필요가 없다. JpaDomainEventStore가 이 인터페이스를 구현하고, 테스트에서는 FakeDomainEventStore가 인메모리 리스트로 대체한다.
 
-그 다음은 이벤트 구독이다. CB의 `getEventPublisher().onStateTransition()` 메서드로 상태 전환 이벤트를 받을 수 있다. 여기서 API를 실제로 JAR에서 확인했는데, `StateTransition` enum의 `toState` 필드가 Kotlin에서 `getToState()` → `.toState` 프로퍼티로 자동 변환된다는 걸 확인했다.
+AOP로 `@RecordEvent` 어노테이션도 만들었다. SpEL로 aggregateId와 actor를 메서드 파라미터에서 추출한다.
 
 ```kotlin
-@Service
-class AdaptiveRateLimitService(
-    private val proxyManager: ProxyManager<ByteArray>,
-) {
-    private val currentPolicies = ConcurrentHashMap<String, AdaptiveRateLimitPolicy>()
+@Around("@annotation(recordEvent)")
+fun around(pjp: ProceedingJoinPoint, recordEvent: RecordEvent): Any? {
+    val result = pjp.proceed()
 
-    fun registerCircuitBreaker(cb: CircuitBreaker) {
-        cb.eventPublisher.onStateTransition { event ->
-            val newPolicy = when (event.stateTransition.toState) {
-                CircuitBreaker.State.OPEN      -> AdaptiveRateLimitPolicy.Open
-                CircuitBreaker.State.HALF_OPEN -> AdaptiveRateLimitPolicy.HalfOpen
-                CircuitBreaker.State.CLOSED    -> AdaptiveRateLimitPolicy.Closed
-                else -> return@onStateTransition
-            }
-            currentPolicies[cb.name] = newPolicy
-            log.warn("[AdaptiveRateLimit] CB '{}' → {} : {} req/min",
-                cb.name, event.stateTransition.toState, newPolicy.capacity)
-        }
+    val sig = pjp.signature as MethodSignature
+    val ctx = StandardEvaluationContext().apply {
+        sig.parameterNames.forEachIndexed { i, name -> setVariable(name, pjp.args[i]) }
+        setVariable("result", result)
     }
 
-    fun resolveBucket(cbName: String, bucketKey: String) =
-        proxyManager.builder().build(
-            bucketKey.toByteArray(Charsets.UTF_8),
-            currentPolicyFor(cbName).toBucketConfiguration(),
-        )
+    val aggregateId = parser.parseExpression(recordEvent.aggregateIdSpel).getValue(ctx)?.toString() ?: "unknown"
+    store.append(DomainEvent(
+        aggregateType = recordEvent.aggregateType,
+        aggregateId   = aggregateId,
+        eventType     = recordEvent.eventType,
+        eventPayload  = objectMapper.writeValueAsString(result ?: emptyMap<String, Any>()),
+        actor         = ...
+    ))
+    return result
 }
 ```
 
-`ConcurrentHashMap`으로 CB 이름 → 현재 정책을 관리한다. 이벤트가 오면 맵을 교체하고, `resolveBucket` 호출 시 현재 맵에서 정책을 꺼내 `BucketConfiguration`을 생성한다. Bucket4j의 Redis ProxyManager는 `build(key, BucketConfiguration)` 오버로드를 지원하니 직접 전달하면 된다.
-
-리스너 등록은 `ApplicationReadyEvent`에서 처리했다. `CircuitBreakerRegistry.getAllCircuitBreakers()`로 등록된 모든 CB를 가져와 일괄 등록한다.
+사용하는 쪽에서는 이렇게 된다.
 
 ```kotlin
-@Component
-class CircuitBreakerEventListenerConfig(
-    private val circuitBreakerRegistry: CircuitBreakerRegistry,
-    private val adaptiveRateLimitService: AdaptiveRateLimitService,
-) {
-    @EventListener(ApplicationReadyEvent::class)
-    fun registerListeners() {
-        circuitBreakerRegistry.allCircuitBreakers.forEach { cb ->
-            adaptiveRateLimitService.registerCircuitBreaker(cb)
-        }
-    }
-}
+@RecordEvent(
+    aggregateType = "Resume",
+    eventType = "RESUME_UPDATED",
+    aggregateIdSpel = "#resumeId",
+    actorSpel = "#actor"
+)
+fun updateResume(resumeId: Long, actor: String, dto: ResumeUpdateDto): Resume { ... }
 ```
 
-테스트에서 한 가지 함정이 있었다. Mockito의 `@ExtendWith(MockitoExtension::class)`는 strict stubbing을 적용하는데, `@BeforeEach`에서 `proxyManager.builder()` stub을 잡아두면 해당 stub을 사용하지 않는 테스트에서 `UnnecessaryStubbingException`이 난다. 그래서 ProxyManager stub은 `resolveBucket`을 직접 검증하는 테스트 메서드 안으로 이동했다.
+구현 중 한 가지 실수가 있었다. `DomainEvent`를 일반 class로 선언했는데, 테스트에서 포지셔널 생성자 호출로 인스턴스를 만들다 보니 `occurredAt` 파라미터 위치에서 타입 불일치 컴파일 에러가 났다. `LocalDateTime`이 들어가야 할 자리에 `String?`이 추론되는 상황이었다. named parameter로 바꾸니 바로 해결됐다. 코드가 길어지는 단점이 있지만 생성자 파라미터 순서에 의존하는 건 더 위험하다.
 
-또 `bucketBuilder.build(any(), any<Supplier<BucketConfiguration>>())`로 stub하면 실제 코드가 `build(ByteArray, BucketConfiguration)` 오버로드를 호출할 때 타입이 안 맞아 `PotentialStubbingProblem`이 발생한다. `any(BucketConfiguration::class.java)`로 명시해야 정확히 매칭된다.
-
-실제 CB 상태 전환 테스트는 `CircuitBreakerRegistry.of(CircuitBreakerConfig.ofDefaults()).circuitBreaker(name)`으로 실제 CB 인스턴스를 만들고 `transitionToOpenState()`, `transitionToHalfOpenState()`, `transitionToClosedState()`를 직접 호출했다. 이렇게 하면 실제 이벤트가 발행되고 리스너가 트리거된다.
+테스트는 FakeDomainEventStore 하나로 다섯 가지 시나리오를 커버했다.
 
 ```kotlin
 @Test
-fun `CB가 OPEN → HALF_OPEN → CLOSED 순으로 전환되면 정책이 순서대로 바뀐다`() {
-    val cb = createCircuitBreaker("testCb3")
-    service.registerCircuitBreaker(cb)
+fun `periodEvents filters by time range`() {
+    val now = LocalDateTime.now()
+    store.appendWithTime(DomainEvent(aggregateType = "Resume", aggregateId = "1",
+        eventType = "OLD", eventPayload = "{}", actor = null, occurredAt = now.minusDays(2)))
+    store.appendWithTime(DomainEvent(aggregateType = "Resume", aggregateId = "1",
+        eventType = "NEW", eventPayload = "{}", actor = null, occurredAt = now))
 
-    cb.transitionToOpenState()
-    assertEquals(AdaptiveRateLimitPolicy.Open, service.currentPolicyFor("testCb3"))
-
-    cb.transitionToHalfOpenState()
-    assertEquals(AdaptiveRateLimitPolicy.HalfOpen, service.currentPolicyFor("testCb3"))
-
-    cb.transitionToClosedState()
-    assertEquals(AdaptiveRateLimitPolicy.Closed, service.currentPolicyFor("testCb3"))
+    val events = service.periodEvents("Resume", now.minusHours(1), now.plusHours(1))
+    assertEquals(1, events.size)
+    assertEquals("NEW", events[0].eventType)
 }
 ```
 
-모니터링 API도 추가했다. `GET /api/adaptive-rate-limit/status`를 치면 등록된 모든 CB의 현재 상태, 적용 중인 정책, 실패율, 버퍼 호출 수를 JSON으로 반환한다. 프론트엔드에서 3초 polling으로 보여준다.
+Fake 구현은 10줄 남짓이다. Mockito stub 없이도 시간 필터 로직을 정확하게 검증할 수 있다.
 
-이 패턴의 의미는 Circuit Breaker와 Rate Limiter를 독립적인 방어선으로 두는 게 아니라 연동하는 것이다. CB가 문제를 감지하면 Rate Limiter가 즉각 제동을 건다. CB가 회복하면 Rate Limiter도 조심스럽게 열린다. 두 레이어가 같은 신호를 보고 움직이는 게 훨씬 자연스럽다.
+프론트엔드는 `/admin/event-sourcing`에 추가했다. 5초 polling으로 최근 이벤트 30건을 보여주고, aggregate type + id를 입력하면 해당 집계의 전체 이벤트 히스토리를 시계열로 표시한다. 이벤트 행을 클릭하면 payload JSON이 펼쳐진다.
 
-한 가지 아쉬운 점은 Rate Limit 정책이 전역적이라는 것이다. 같은 CB 이름이면 모든 클라이언트 IP에 동일한 정책이 적용된다. 사용자별로 다른 정책을 주고 싶다면 `resolveBucket(cbName, userKey)`에서 bucketKey를 조합해 개별 버킷을 만들면 된다. 그건 다음 단계다.
+이 구조의 진짜 장점은 나중에 생긴다. 지금은 단순 조회만 하지만, 이벤트 스트림이 쌓이면 "특정 시점 상태 재현"이 가능해진다. Resume 이벤트를 CREATED부터 특정 날짜까지만 재생하면 그 시점의 이력서를 복원할 수 있다. 이건 현재 상태 기반 감사 로그로는 절대 할 수 없는 것이다.
+
+한 가지 숙제가 남았다. 현재 event_payload가 TEXT 컬럼에 JSON 문자열로 들어간다. 나중에 특정 필드로 쿼리하려면 MariaDB JSON 함수를 쓰거나 Elasticsearch에 인덱싱해야 한다. 지금은 단순 저장과 재생만 하니 일단 이 상태로 두기로 했다.

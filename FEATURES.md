@@ -62,6 +62,16 @@
 ## 캐시
 - 2레벨 캐시: L1 Caffeine(JVM, 30s) + L2 Redisson(Redis, 300s) + pub/sub 무효화
 
+## 이벤트 소싱
+- 도메인 이벤트 append-only 감사 추적 (JPA EventStore)
+  - DomainEvent JPA 엔티티 + Flyway V11 domain_events 테이블 (aggregate_type/aggregate_id/event_type/event_payload/actor/occurred_at)
+  - DomainEventStore 포트 인터페이스 + JpaDomainEventStore 어댑터
+  - EventSourcingService: record/replayAggregate/periodEvents/stats
+  - @RecordEvent AOP 어노테이션: SpEL 기반 aggregateId/actor 자동 추출
+  - GET /api/event-sourcing/stats, /recent, /aggregate/{type}/{id}, /aggregate/{type}/period
+  - POST /api/event-sourcing/record 수동 이벤트 기록 API
+  - 프론트엔드: /admin/event-sourcing 대시보드 (5s polling, 집계 리플레이, payload 펼치기)
+
 ## 비동기 / 이벤트
 - Spring Modulith 이벤트 퍼블리케이션 (@ApplicationModuleListener + JPA outbox)
 - RabbitMQ 감사 로그 파이프라인 (AuditLogAspect → RabbitMQ → ES 인덱싱)
