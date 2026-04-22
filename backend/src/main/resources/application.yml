@@ -111,9 +111,17 @@ aws:
   tracing:
     sampling:
       probability: 1.0
+    baggage:
+      remote-fields:
+        - userId
+        - tenantId
+      correlation:
+        fields:
+          - userId
+          - tenantId
 logging:
   pattern:
-    level: "%5p [${spring.application.name:},%X{traceId:-},%X{spanId:-}]"
+    level: "%5p [${spring.application.name:},%X{traceId:-},%X{spanId:-},%X{userId:-},%X{tenantId:-}]"
 
 cache:
   two-level:

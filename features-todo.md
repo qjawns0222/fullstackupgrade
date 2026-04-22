@@ -9,12 +9,7 @@
 
 ---
 
-1. **분산 추적 컨텍스트 전파 강화 (Baggage Propagation)**
-   - 문제: Brave 트레이싱은 traceId/spanId만 전파하며, 비즈니스 컨텍스트(userId, tenantId)가 비동기 경계(RabbitMQ, @Async)를 넘어갈 때 소실됨
-   - 해결: Micrometer Baggage API로 userId/tenantId를 W3C Baggage 헤더에 실어 RabbitMQ MessagePostProcessor + @Async TaskDecorator에서 복원
-   - 신규 라이브러리: `io.micrometer:micrometer-tracing-bridge-brave` (이미 있음), `io.micrometer:context-propagation:1.1.1`
-
-2. **AI 기반 이력서 스코어링 (LLM Resume Scoring)**
+1. **AI 기반 이력서 스코어링 (LLM Resume Scoring)**
    - 문제: OCR로 텍스트 추출 후 구조화 분석 없이 그대로 저장 — 직무 적합도 점수나 키워드 매칭이 없음
    - 해결: Spring AI + OpenAI GPT-4o-mini 연동, 이력서 텍스트 → 스킬/경력/학력 구조 추출 + 직무별 적합도 0-100 점수 산출, 결과 JPA 저장
    - 신규 라이브러리: `org.springframework.ai:spring-ai-openai-spring-boot-starter:1.0.0`

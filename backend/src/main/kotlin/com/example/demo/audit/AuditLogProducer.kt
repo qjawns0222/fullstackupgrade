@@ -1,12 +1,16 @@
 package com.example.demo.audit
 
+import com.example.demo.baggage.BaggageMessagePostProcessor
 import com.example.demo.config.RabbitMqConfig
 import org.slf4j.LoggerFactory
 import org.springframework.amqp.rabbit.core.RabbitTemplate
 import org.springframework.stereotype.Service
 
 @Service
-class AuditLogProducer(private val rabbitTemplate: RabbitTemplate) {
+class AuditLogProducer(
+    private val rabbitTemplate: RabbitTemplate,
+    private val baggageMessagePostProcessor: BaggageMessagePostProcessor
+) {
 
     private val logger = LoggerFactory.getLogger(AuditLogProducer::class.java)
 
@@ -16,7 +20,8 @@ class AuditLogProducer(private val rabbitTemplate: RabbitTemplate) {
             rabbitTemplate.convertAndSend(
                     RabbitMqConfig.AUDIT_EXCHANGE,
                     RabbitMqConfig.AUDIT_ROUTING_KEY,
-                    message
+                    message,
+                    baggageMessagePostProcessor
             )
             logger.info("Sent audit log to RabbitMQ: $message")
         } catch (e: Exception) {

@@ -1,5 +1,6 @@
 package com.example.demo.config
 
+import io.micrometer.tracing.Tracer
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -27,6 +28,7 @@ import org.springframework.test.context.junit.jupiter.SpringExtension
 class TracingConfigTest {
 
     @MockBean lateinit var connectionFactory: ConnectionFactory
+    @MockBean lateinit var tracer: Tracer
 
     @Autowired lateinit var rabbitTemplate: RabbitTemplate
 
