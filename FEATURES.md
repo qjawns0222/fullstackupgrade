@@ -17,6 +17,14 @@
   - SpanStore 포트 인터페이스 + JpaSpanStore 어댑터 (Flyway V8 span_records 테이블)
   - GET /api/tracing/stats, /recent, /slow REST API
   - 프론트엔드: /admin/tracing 대시보드 (5s polling, 최근 Span/SLOW Span 탭 전환)
+- 분산 추적 Baggage 전파 (Micrometer Baggage API + W3C Baggage)
+  - BaggageContextHolder: Micrometer Tracer API로 userId/tenantId 설정·조회
+  - BaggageMessagePostProcessor: RabbitMQ convertAndSend 시 AMQP 메시지 헤더에 Baggage 삽입
+  - BaggageTaskDecorator: @Async 스레드 전환 시 Baggage 캡처 후 워커 스레드에서 복원
+  - BaggageAmqpListener: 수신 AMQP 메시지 헤더에서 Baggage 복원 유틸리티
+  - management.tracing.baggage.remote-fields + correlation.fields 설정으로 HTTP/MDC 자동 전파
+  - GET /api/baggage/current, /snapshot, POST /api/baggage/set REST API
+  - 프론트엔드: /admin/baggage 대시보드 (Baggage 실시간 조회·설정, 전파 경로 설명)
 
 ## API 변경 관리
 - API Breaking Change 자동 감지 (openapi-diff-core 2.1.0)

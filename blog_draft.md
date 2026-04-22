@@ -1,102 +1,137 @@
-[Fullstack] 이벤트 소싱 감사 추적 - 도메인 이벤트를 append-only로 저장하고 시점 재현하기
+[Fullstack] 분산 추적 Baggage 전파 - userId/tenantId가 RabbitMQ와 @Async 경계를 넘어가게 하기
 
 ---
 
-감사 로그는 이미 있었다. RabbitMQ → Elasticsearch로 흘러가는 파이프라인도 있고, AuditLogAspect가 메서드마다 현재 상태를 찍어주고 있었다. 그런데 어느 날 "이 이력서가 사흘 전 상태로 어떻게 생겼었는지 볼 수 있나요?"라는 질문을 받고 막혔다. 현재 상태는 알 수 있지만, 특정 시점의 상태를 재현하는 건 불가능했다.
+traceId는 잘 전파되고 있었다. Zipkin 대시보드를 보면 HTTP 요청부터 RabbitMQ 메시지까지 깔끔하게 연결된다. 그런데 로그를 보다가 이상한 걸 발견했다. `AuditLogAspect`에서는 분명히 `userId=user-42`가 찍히는데, RabbitMQ 컨슈머 쪽 로그에는 userId가 없다. `@Async`로 처리되는 이메일 발송 로그에도 마찬가지다.
 
-이게 이벤트 소싱을 도입하고 싶었던 이유다. 상태를 덮어쓰는 게 아니라 "무슨 일이 일어났는가"를 순서대로 쌓는 것. 그러면 임의의 시점까지 이벤트를 재생해서 그 시점 상태를 복원할 수 있다.
+traceId/spanId는 Brave가 자동으로 전파해준다. 하지만 "이 요청을 누가, 어느 테넌트로 보냈는가"라는 비즈니스 컨텍스트는 전혀 전파되지 않는다. 스레드가 바뀌거나 메시지 브로커를 넘어가는 순간 컨텍스트가 사라진다.
 
-Axon Framework도 검토했다. 근데 프로젝트 규모에 비해 너무 무겁다. EventStore, EventBus, CommandBus, Aggregate 어노테이션... 기존 JPA 코드를 대거 바꿔야 한다. 우리가 필요한 건 이벤트를 시계열로 저장하고 조회하는 것 뿐이다. Flyway 마이그레이션 하나와 JPA 엔티티 하나로 시작했다.
+W3C Baggage 스펙이 이 문제를 위해 존재한다. traceId처럼 요청 범위 내의 key-value 쌍을 HTTP 헤더나 메시지 헤더로 전파하는 표준이다. Micrometer Tracing이 이미 `BaggageManager` API를 제공하고 있었고, Spring Boot 3.2 + micrometer-tracing-bridge-brave 1.2.0이 이미 의존성에 있었다. 새 라이브러리를 추가할 필요가 없었다.
 
-```sql
-CREATE TABLE domain_events (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    aggregate_type VARCHAR(100) NOT NULL,
-    aggregate_id   VARCHAR(100) NOT NULL,
-    event_type     VARCHAR(100) NOT NULL,
-    event_payload  TEXT NOT NULL,
-    actor          VARCHAR(100),
-    occurred_at    DATETIME(6) NOT NULL
-);
-CREATE INDEX idx_domain_events_aggregate ON domain_events (aggregate_type, aggregate_id);
+먼저 `application.yml`에 baggage 필드를 선언했다.
+
+```yaml
+management:
+  tracing:
+    sampling:
+      probability: 1.0
+    baggage:
+      remote-fields:
+        - userId
+        - tenantId
+      correlation:
+        fields:
+          - userId
+          - tenantId
 ```
 
-`aggregate_type`은 "Resume", "JobApplication" 같은 도메인 개념이고, `aggregate_id`는 해당 엔티티의 PK다. `event_payload`는 JSON 문자열로 자유롭게 담는다. 스키마를 강제하지 않는 대신 유연성을 얻었다.
+`remote-fields`는 HTTP 헤더로 자동 전파되고, `correlation.fields`는 MDC에 자동으로 올라간다. 로그 패턴도 같이 수정했다.
 
-포트 인터페이스는 얇게 유지했다.
-
-```kotlin
-interface DomainEventStore {
-    fun append(event: DomainEvent): DomainEvent
-    fun findByAggregate(aggregateType: String, aggregateId: String): List<DomainEvent>
-    fun findRecent(limit: Int): List<DomainEvent>
-    fun findByAggregateTypeAndPeriod(aggregateType: String, from: LocalDateTime, to: LocalDateTime): List<DomainEvent>
-    fun stats(): DomainEventStats
-}
+```yaml
+logging:
+  pattern:
+    level: "%5p [${spring.application.name:},%X{traceId:-},%X{spanId:-},%X{userId:-},%X{tenantId:-}]"
 ```
 
-서비스가 JpaRepository를 직접 알 필요가 없다. JpaDomainEventStore가 이 인터페이스를 구현하고, 테스트에서는 FakeDomainEventStore가 인메모리 리스트로 대체한다.
-
-AOP로 `@RecordEvent` 어노테이션도 만들었다. SpEL로 aggregateId와 actor를 메서드 파라미터에서 추출한다.
+이제 `BaggageContextHolder`를 만들었다. Micrometer의 `Tracer`가 `BaggageManager`를 extends하기 때문에 `Tracer`만 주입받으면 된다.
 
 ```kotlin
-@Around("@annotation(recordEvent)")
-fun around(pjp: ProceedingJoinPoint, recordEvent: RecordEvent): Any? {
-    val result = pjp.proceed()
+@Component
+class BaggageContextHolder(private val tracer: Tracer) {
 
-    val sig = pjp.signature as MethodSignature
-    val ctx = StandardEvaluationContext().apply {
-        sig.parameterNames.forEachIndexed { i, name -> setVariable(name, pjp.args[i]) }
-        setVariable("result", result)
+    fun set(userId: String?, tenantId: String?) {
+        userId?.let { tracer.createBaggage(USER_ID_KEY, it).makeCurrent(it) }
+        tenantId?.let { tracer.createBaggage(TENANT_ID_KEY, it).makeCurrent(it) }
     }
 
-    val aggregateId = parser.parseExpression(recordEvent.aggregateIdSpel).getValue(ctx)?.toString() ?: "unknown"
-    store.append(DomainEvent(
-        aggregateType = recordEvent.aggregateType,
-        aggregateId   = aggregateId,
-        eventType     = recordEvent.eventType,
-        eventPayload  = objectMapper.writeValueAsString(result ?: emptyMap<String, Any>()),
-        actor         = ...
-    ))
-    return result
+    fun get(): BaggageContext {
+        return BaggageContext(
+            userId = tracer.getBaggage(USER_ID_KEY)?.get(),
+            tenantId = tracer.getBaggage(TENANT_ID_KEY)?.get()
+        )
+    }
+
+    companion object {
+        const val USER_ID_KEY = "userId"
+        const val TENANT_ID_KEY = "tenantId"
+    }
 }
 ```
 
-사용하는 쪽에서는 이렇게 된다.
+JAR에서 직접 확인했을 때 `createBaggage(name, value)`가 deprecated 경고를 냈다. 대신 `createBaggage(name)`을 먼저 호출하고 `set(value).makeCurrent()`를 체이닝하는 방식이 권장되는데, 실제로는 `makeCurrent(value)` 오버로드가 있어서 한 줄로 쓸 수 있었다. 문서와 실제 JAR API가 미묘하게 다른 케이스다.
+
+RabbitMQ 전파는 `MessagePostProcessor`로 처리했다. `AuditLogProducer`에서 `convertAndSend` 4번째 인자로 넘긴다.
 
 ```kotlin
-@RecordEvent(
-    aggregateType = "Resume",
-    eventType = "RESUME_UPDATED",
-    aggregateIdSpel = "#resumeId",
-    actorSpel = "#actor"
+@Component
+class BaggageMessagePostProcessor(
+    private val baggageContextHolder: BaggageContextHolder
+) : MessagePostProcessor {
+
+    override fun postProcessMessage(message: Message): Message {
+        val ctx = baggageContextHolder.get()
+        ctx.userId?.let { message.messageProperties.setHeader(USER_ID_KEY, it) }
+        ctx.tenantId?.let { message.messageProperties.setHeader(TENANT_ID_KEY, it) }
+        return message
+    }
+}
+```
+
+```kotlin
+// AuditLogProducer
+rabbitTemplate.convertAndSend(
+    RabbitMqConfig.AUDIT_EXCHANGE,
+    RabbitMqConfig.AUDIT_ROUTING_KEY,
+    message,
+    baggageMessagePostProcessor  // 추가된 부분
 )
-fun updateResume(resumeId: Long, actor: String, dto: ResumeUpdateDto): Resume { ... }
 ```
 
-구현 중 한 가지 실수가 있었다. `DomainEvent`를 일반 class로 선언했는데, 테스트에서 포지셔널 생성자 호출로 인스턴스를 만들다 보니 `occurredAt` 파라미터 위치에서 타입 불일치 컴파일 에러가 났다. `LocalDateTime`이 들어가야 할 자리에 `String?`이 추론되는 상황이었다. named parameter로 바꾸니 바로 해결됐다. 코드가 길어지는 단점이 있지만 생성자 파라미터 순서에 의존하는 건 더 위험하다.
-
-테스트는 FakeDomainEventStore 하나로 다섯 가지 시나리오를 커버했다.
+`@Async` 경계는 `TaskDecorator`로 처리했다. 기존 `AsyncConfig`에 MDC만 복사하던 인라인 람다를 `BaggageTaskDecorator`로 교체했다.
 
 ```kotlin
-@Test
-fun `periodEvents filters by time range`() {
-    val now = LocalDateTime.now()
-    store.appendWithTime(DomainEvent(aggregateType = "Resume", aggregateId = "1",
-        eventType = "OLD", eventPayload = "{}", actor = null, occurredAt = now.minusDays(2)))
-    store.appendWithTime(DomainEvent(aggregateType = "Resume", aggregateId = "1",
-        eventType = "NEW", eventPayload = "{}", actor = null, occurredAt = now))
+class BaggageTaskDecorator(private val tracer: Tracer) : TaskDecorator {
 
-    val events = service.periodEvents("Resume", now.minusHours(1), now.plusHours(1))
-    assertEquals(1, events.size)
-    assertEquals("NEW", events[0].eventType)
+    override fun decorate(runnable: Runnable): Runnable {
+        val userId = tracer.getBaggage(USER_ID_KEY)?.get()
+        val tenantId = tracer.getBaggage(TENANT_ID_KEY)?.get()
+        val mdcContext = MDC.getCopyOfContextMap()
+
+        return Runnable {
+            try {
+                if (mdcContext != null) MDC.setContextMap(mdcContext)
+                userId?.let { tracer.createBaggage(USER_ID_KEY, it).makeCurrent(it) }
+                tenantId?.let { tracer.createBaggage(TENANT_ID_KEY, it).makeCurrent(it) }
+                runnable.run()
+            } finally {
+                MDC.clear()
+            }
+        }
+    }
 }
 ```
 
-Fake 구현은 10줄 남짓이다. Mockito stub 없이도 시간 필터 로직을 정확하게 검증할 수 있다.
+핵심은 `decorate()` 호출 시점(메인 스레드)에서 Baggage 값을 캡처하고, `Runnable.run()` 시점(워커 스레드)에서 복원하는 것이다. 스레드 로컬 기반인 Micrometer Baggage는 스레드가 바뀌면 자동으로 사라지기 때문에 수동으로 재설정해야 한다.
 
-프론트엔드는 `/admin/event-sourcing`에 추가했다. 5초 polling으로 최근 이벤트 30건을 보여주고, aggregate type + id를 입력하면 해당 집계의 전체 이벤트 히스토리를 시계열로 표시한다. 이벤트 행을 클릭하면 payload JSON이 펼쳐진다.
+테스트에서 문제가 있었다. `Tracer` 인터페이스의 추상 메서드가 예상보다 많았다. `withSpan`, `startScopedSpan`, `traceContextBuilder`까지 전부 구현해야 했다. Mockito로 mock하면 어노테이션 인터페이스 mock 시 Kotlin에서 NPE가 터지는 기존 문제가 있어서 `FakeTracer`를 직접 구현했다.
 
-이 구조의 진짜 장점은 나중에 생긴다. 지금은 단순 조회만 하지만, 이벤트 스트림이 쌓이면 "특정 시점 상태 재현"이 가능해진다. Resume 이벤트를 CREATED부터 특정 날짜까지만 재생하면 그 시점의 이력서를 복원할 수 있다. 이건 현재 상태 기반 감사 로그로는 절대 할 수 없는 것이다.
+```kotlin
+class FakeTracer : Tracer {
+    private val store = mutableMapOf<String, String>()
 
-한 가지 숙제가 남았다. 현재 event_payload가 TEXT 컬럼에 JSON 문자열로 들어간다. 나중에 특정 필드로 쿼리하려면 MariaDB JSON 함수를 쓰거나 Elasticsearch에 인덱싱해야 한다. 지금은 단순 저장과 재생만 하니 일단 이 상태로 두기로 했다.
+    override fun createBaggage(name: String, value: String): Baggage =
+        FakeBaggage(name, value, store).also { store[name] = value }
+
+    override fun getBaggage(name: String): Baggage? =
+        FakeBaggage(name, store[name], store)
+
+    override fun getAllBaggage(): Map<String, String> = store.toMap()
+    // ... 나머지 NOOP 구현
+}
+```
+
+`TracingConfigTest`에도 문제가 생겼다. `AsyncConfig`가 이제 `Tracer`를 생성자로 받는데, 테스트에 `@MockBean Tracer`가 없어서 컨텍스트 로딩이 실패했다. `@MockBean lateinit var tracer: Tracer` 한 줄 추가로 해결됐다.
+
+전체적으로 보면 HTTP 범위에서는 Spring의 자동 설정(`remote-fields`)이 처리해주고, 비동기 경계에서는 `BaggageTaskDecorator`, 메시지 경계에서는 `BaggageMessagePostProcessor`가 각각 책임진다. 프론트엔드에는 `/admin/baggage` 페이지를 만들어서 현재 트레이스의 Baggage 값을 실시간으로 확인할 수 있게 했다.
+
+이제 컨슈머 로그에서도 `[app,traceId,spanId,user-42,tenant-A]` 형태로 출력된다. 문제가 생겼을 때 "누가 보낸 요청인지"를 로그 한 줄로 바로 알 수 있게 됐다.
