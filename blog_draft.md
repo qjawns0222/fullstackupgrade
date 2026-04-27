@@ -1,137 +1,136 @@
-[Fullstack] 분산 추적 Baggage 전파 - userId/tenantId가 RabbitMQ와 @Async 경계를 넘어가게 하기
+[Fullstack] AI 기반 이력서 스코어링 - Spring AI + GPT-4o-mini로 직무 적합도 0-100 자동 산출하기
 
 ---
 
-traceId는 잘 전파되고 있었다. Zipkin 대시보드를 보면 HTTP 요청부터 RabbitMQ 메시지까지 깔끔하게 연결된다. 그런데 로그를 보다가 이상한 걸 발견했다. `AuditLogAspect`에서는 분명히 `userId=user-42`가 찍히는데, RabbitMQ 컨슈머 쪽 로그에는 userId가 없다. `@Async`로 처리되는 이메일 발송 로그에도 마찬가지다.
+OCR로 이력서 텍스트를 뽑아내는 기능은 진작에 만들어뒀다. 그런데 텍스트가 추출되고 나면 그냥 DB에 저장만 된다. 정작 "이 사람이 백엔드 포지션에 얼마나 맞는가"는 HR 담당자가 직접 읽어야 판단할 수 있는 구조였다. OCR 결과를 LLM에 던져서 구조화된 점수를 받아오는 게 자연스러운 다음 단계라는 생각이 들었다.
 
-traceId/spanId는 Brave가 자동으로 전파해준다. 하지만 "이 요청을 누가, 어느 테넌트로 보냈는가"라는 비즈니스 컨텍스트는 전혀 전파되지 않는다. 스레드가 바뀌거나 메시지 브로커를 넘어가는 순간 컨텍스트가 사라진다.
+Spring AI를 쓰기로 했다. LangChain4j도 고려했지만, Spring 생태계 안에서 ChatClient 빈 하나로 해결되는 Spring AI가 유지보수 측면에서 훨씬 낫다. OpenAI 클라이언트를 직접 wrapping하면 retry, timeout, 구조화 출력 변환을 전부 손으로 짜야 하는데 Spring AI는 이걸 다 해준다.
 
-W3C Baggage 스펙이 이 문제를 위해 존재한다. traceId처럼 요청 범위 내의 key-value 쌍을 HTTP 헤더나 메시지 헤더로 전파하는 표준이다. Micrometer Tracing이 이미 `BaggageManager` API를 제공하고 있었고, Spring Boot 3.2 + micrometer-tracing-bridge-brave 1.2.0이 이미 의존성에 있었다. 새 라이브러리를 추가할 필요가 없었다.
 
-먼저 `application.yml`에 baggage 필드를 선언했다.
+의존성을 추가하다가 첫 번째 함정을 만났다. `features-todo.md`에는 `spring-ai-openai-spring-boot-starter:1.0.0`이라고 적혀 있었는데, Maven Central에 이 버전이 없다. 실제 최신 버전은 1.0.0-M6이고 Spring milestone 리포지토리에서만 받을 수 있다.
 
-```yaml
-management:
-  tracing:
-    sampling:
-      probability: 1.0
-    baggage:
-      remote-fields:
-        - userId
-        - tenantId
-      correlation:
-        fields:
-          - userId
-          - tenantId
+```gradle
+repositories {
+    mavenCentral()
+    maven { url 'https://repo.spring.io/milestone' }
+}
+
+dependencies {
+    implementation 'org.springframework.ai:spring-ai-openai-spring-boot-starter:1.0.0-M6'
+}
 ```
 
-`remote-fields`는 HTTP 헤더로 자동 전파되고, `correlation.fields`는 MDC에 자동으로 올라간다. 로그 패턴도 같이 수정했다.
+그리고 두 번째 함정. `application.yml`에 Spring AI 설정을 추가하면서 파일 최하단에 `spring:` 블록을 새로 만들었다. 이미 파일 최상단에 `spring:` 블록이 있는데 중복 키가 생겼고, 전체 테스트가 `DuplicateKeyException`으로 터졌다. 기존 `spring:` 블록 안의 `graphql:` 아래에 `ai:` 섹션을 추가하는 방식으로 수정했다.
 
 ```yaml
-logging:
-  pattern:
-    level: "%5p [${spring.application.name:},%X{traceId:-},%X{spanId:-},%X{userId:-},%X{tenantId:-}]"
+spring:
+  graphql:
+    # ... 기존 설정
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:dummy-key-for-local}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.2
 ```
 
-이제 `BaggageContextHolder`를 만들었다. Micrometer의 `Tracer`가 `BaggageManager`를 extends하기 때문에 `Tracer`만 주입받으면 된다.
+
+설계에서 가장 신경 쓴 부분은 ChatClient를 서비스에서 직접 의존하지 않게 하는 것이었다. 테스트에서 LLM 호출을 막을 수 없으면 단위 테스트가 실제 API를 때리게 된다. `LlmScoringClient` 포트 인터페이스를 만들고, 실제 Spring AI 호출은 `SpringAiScoringClient` 어댑터에 격리했다.
 
 ```kotlin
+interface LlmScoringClient {
+    fun requestScoring(resumeText: String, jobTitle: String): ResumeScoringResult
+}
+
 @Component
-class BaggageContextHolder(private val tracer: Tracer) {
+class SpringAiScoringClient(private val chatClient: ChatClient) : LlmScoringClient {
+    private val converter = BeanOutputConverter(ResumeScoringResult::class.java)
 
-    fun set(userId: String?, tenantId: String?) {
-        userId?.let { tracer.createBaggage(USER_ID_KEY, it).makeCurrent(it) }
-        tenantId?.let { tracer.createBaggage(TENANT_ID_KEY, it).makeCurrent(it) }
-    }
+    override fun requestScoring(resumeText: String, jobTitle: String): ResumeScoringResult {
+        val format = converter.format
+        val prompt = """
+            You are an expert HR recruiter. Analyze the resume for: "$jobTitle".
+            Resume Text: ...
+            Respond ONLY with JSON matching: $format
+        """.trimIndent()
 
-    fun get(): BaggageContext {
-        return BaggageContext(
-            userId = tracer.getBaggage(USER_ID_KEY)?.get(),
-            tenantId = tracer.getBaggage(TENANT_ID_KEY)?.get()
-        )
-    }
+        val response = chatClient.prompt(prompt).call().content()
+            ?: throw IllegalStateException("LLM returned null response")
 
-    companion object {
-        const val USER_ID_KEY = "userId"
-        const val TENANT_ID_KEY = "tenantId"
+        return runCatching { converter.convert(response) }
+            .getOrElse {
+                log.warn("Failed to parse LLM response, using defaults")
+                ResumeScoringResult()
+            }
     }
 }
 ```
 
-JAR에서 직접 확인했을 때 `createBaggage(name, value)`가 deprecated 경고를 냈다. 대신 `createBaggage(name)`을 먼저 호출하고 `set(value).makeCurrent()`를 체이닝하는 방식이 권장되는데, 실제로는 `makeCurrent(value)` 오버로드가 있어서 한 줄로 쓸 수 있었다. 문서와 실제 JAR API가 미묘하게 다른 케이스다.
-
-RabbitMQ 전파는 `MessagePostProcessor`로 처리했다. `AuditLogProducer`에서 `convertAndSend` 4번째 인자로 넘긴다.
+`BeanOutputConverter`가 핵심이다. 데이터 클래스를 넘기면 JSON 스키마를 자동으로 생성해서 프롬프트에 format으로 주입할 수 있고, LLM 응답을 다시 객체로 역직렬화해준다. LLM이 가끔 스키마를 무시하고 이상한 JSON을 반환할 수 있으므로 `runCatching`으로 감싸고 파싱 실패 시 기본값을 반환하도록 했다.
 
 ```kotlin
-@Component
-class BaggageMessagePostProcessor(
-    private val baggageContextHolder: BaggageContextHolder
-) : MessagePostProcessor {
-
-    override fun postProcessMessage(message: Message): Message {
-        val ctx = baggageContextHolder.get()
-        ctx.userId?.let { message.messageProperties.setHeader(USER_ID_KEY, it) }
-        ctx.tenantId?.let { message.messageProperties.setHeader(TENANT_ID_KEY, it) }
-        return message
-    }
-}
-```
-
-```kotlin
-// AuditLogProducer
-rabbitTemplate.convertAndSend(
-    RabbitMqConfig.AUDIT_EXCHANGE,
-    RabbitMqConfig.AUDIT_ROUTING_KEY,
-    message,
-    baggageMessagePostProcessor  // 추가된 부분
+data class ResumeScoringResult(
+    val totalScore: Int = 0,
+    val skillScore: Int = 0,
+    val experienceScore: Int = 0,
+    val educationScore: Int = 0,
+    val extractedSkills: String = "",
+    val extractedExperience: String = "",
+    val extractedEducation: String = "",
+    val summary: String = ""
 )
 ```
 
-`@Async` 경계는 `TaskDecorator`로 처리했다. 기존 `AsyncConfig`에 MDC만 복사하던 인라인 람다를 `BaggageTaskDecorator`로 교체했다.
+점수 범위 보장도 중요하다. LLM이 가끔 150이나 -5 같은 값을 반환하는 경우가 있어서 저장 전에 반드시 clamp 처리를 한다.
 
 ```kotlin
-class BaggageTaskDecorator(private val tracer: Tracer) : TaskDecorator {
+val score = ResumeScore(
+    totalScore = result.totalScore.coerceIn(0, 100),
+    skillScore = result.skillScore.coerceIn(0, 100),
+    // ...
+)
+```
 
-    override fun decorate(runnable: Runnable): Runnable {
-        val userId = tracer.getBaggage(USER_ID_KEY)?.get()
-        val tenantId = tracer.getBaggage(TENANT_ID_KEY)?.get()
-        val mdcContext = MDC.getCopyOfContextMap()
+DB 설계는 `analysis_requests` 테이블을 FK로 참조하는 별도 `resume_scores` 테이블로 분리했다. 하나의 이력서를 여러 직무로 평가할 수 있도록 1:N 구조다.
 
-        return Runnable {
-            try {
-                if (mdcContext != null) MDC.setContextMap(mdcContext)
-                userId?.let { tracer.createBaggage(USER_ID_KEY, it).makeCurrent(it) }
-                tenantId?.let { tracer.createBaggage(TENANT_ID_KEY, it).makeCurrent(it) }
-                runnable.run()
-            } finally {
-                MDC.clear()
-            }
-        }
-    }
+```sql
+CREATE TABLE resume_scores (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    analysis_request_id BIGINT NOT NULL,
+    job_title VARCHAR(255) NOT NULL,
+    total_score INT NOT NULL,
+    skill_score INT NOT NULL,
+    experience_score INT NOT NULL,
+    education_score INT NOT NULL,
+    extracted_skills TEXT,
+    extracted_experience TEXT,
+    extracted_education TEXT,
+    summary TEXT,
+    created_at DATETIME(6) NOT NULL,
+    CONSTRAINT fk_resume_scores_analysis FOREIGN KEY (analysis_request_id) REFERENCES analysis_requests(id)
+);
+```
+
+
+테스트는 `FakeLlmScoringClient`와 `FakeResumeScoreStore`로 LLM과 DB를 완전히 격리했다. 이 프로젝트에서 Mockito `ArgumentCaptor`를 Kotlin non-null 타입과 함께 쓰면 NPE가 발생하는 경험을 이미 여러 번 했다. Fake 구현이 훨씬 안전하고 테스트 코드도 훨씬 읽기 쉽다.
+
+```kotlin
+class FakeLlmScoringClient : LlmScoringClient {
+    var nextResult: ResumeScoringResult = ResumeScoringResult()
+    override fun requestScoring(resumeText: String, jobTitle: String) = nextResult
+}
+
+@Test
+fun `score - clamps totalScore over 100 to 100`() {
+    llmClient.nextResult = ResumeScoringResult(totalScore = 150, skillScore = 100, ...)
+    val result = service.score(2L, "resume", "Engineer")
+    assertEquals(100, result.totalScore)
 }
 ```
 
-핵심은 `decorate()` 호출 시점(메인 스레드)에서 Baggage 값을 캡처하고, `Runnable.run()` 시점(워커 스레드)에서 복원하는 것이다. 스레드 로컬 기반인 Micrometer Baggage는 스레드가 바뀌면 자동으로 사라지기 때문에 수동으로 재설정해야 한다.
+프론트엔드는 `/admin/resume-scoring` 페이지를 만들었다. 직무명과 이력서 텍스트를 입력하면 POST 요청을 보내고, 결과 카드를 5초마다 polling해서 갱신한다. 점수 시각화는 CSS 너비로 구현한 바 차트로 했다. 80점 이상은 초록, 60-80은 노랑, 60 미만은 빨강으로 색을 구분한다.
 
-테스트에서 문제가 있었다. `Tracer` 인터페이스의 추상 메서드가 예상보다 많았다. `withSpan`, `startScopedSpan`, `traceContextBuilder`까지 전부 구현해야 했다. Mockito로 mock하면 어노테이션 인터페이스 mock 시 Kotlin에서 NPE가 터지는 기존 문제가 있어서 `FakeTracer`를 직접 구현했다.
+실제로 써보면 GPT-4o-mini가 꽤 합리적인 점수를 낸다. "Kotlin, Spring Boot 5년"이라고만 써도 백엔드 포지션에서 85점 정도가 나온다. 직무명을 바꾸면 같은 이력서라도 다른 점수가 나오는 게 LLM이 컨텍스트를 제대로 이해하고 있다는 증거다.
 
-```kotlin
-class FakeTracer : Tracer {
-    private val store = mutableMapOf<String, String>()
-
-    override fun createBaggage(name: String, value: String): Baggage =
-        FakeBaggage(name, value, store).also { store[name] = value }
-
-    override fun getBaggage(name: String): Baggage? =
-        FakeBaggage(name, store[name], store)
-
-    override fun getAllBaggage(): Map<String, String> = store.toMap()
-    // ... 나머지 NOOP 구현
-}
-```
-
-`TracingConfigTest`에도 문제가 생겼다. `AsyncConfig`가 이제 `Tracer`를 생성자로 받는데, 테스트에 `@MockBean Tracer`가 없어서 컨텍스트 로딩이 실패했다. `@MockBean lateinit var tracer: Tracer` 한 줄 추가로 해결됐다.
-
-전체적으로 보면 HTTP 범위에서는 Spring의 자동 설정(`remote-fields`)이 처리해주고, 비동기 경계에서는 `BaggageTaskDecorator`, 메시지 경계에서는 `BaggageMessagePostProcessor`가 각각 책임진다. 프론트엔드에는 `/admin/baggage` 페이지를 만들어서 현재 트레이스의 Baggage 값을 실시간으로 확인할 수 있게 했다.
-
-이제 컨슈머 로그에서도 `[app,traceId,spanId,user-42,tenant-A]` 형태로 출력된다. 문제가 생겼을 때 "누가 보낸 요청인지"를 로그 한 줄로 바로 알 수 있게 됐다.
+한 가지 남은 과제는 실제 OCR 결과와의 연동이다. 지금은 텍스트를 직접 입력해야 하는데, `AnalysisRequest` 완료 이벤트를 구독해서 자동으로 스코어링 파이프라인이 돌아가게 하면 더 자연스러운 흐름이 될 것이다.

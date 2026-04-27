@@ -3,6 +3,14 @@
 스킬이 새 기능을 구현할 때마다 이 파일을 업데이트한다.
 새 미션 선정 시 이 목록을 먼저 읽어 중복을 피한다.
 
+## AI / LLM 연동
+- AI 기반 이력서 스코어링 (Spring AI + GPT-4o-mini)
+  - LlmScoringClient 포트 인터페이스 + SpringAiScoringClient 어댑터 (ChatClient + BeanOutputConverter)
+  - ResumeScoreStore 포트 인터페이스 + JpaResumeScoreStore 어댑터 (Flyway V12 resume_scores 테이블)
+  - ResumeScoringService: 스킬(40%) + 경력(40%) + 학력(20%) 가중 평균으로 0-100 점수 산출, coerceIn 범위 보장
+  - POST /api/scoring (이력서 텍스트 + 직무명 → 점수), GET /api/scoring (전체 목록), GET /api/scoring/request/{id}
+  - 프론트엔드: /admin/resume-scoring 대시보드 (점수 바 차트, 통계 카드, 5s polling, 상세 펼치기)
+
 ## 사용자 행동 분석
 - 퍼널 분석 (이력서 조회→저장→다운로드 전환율 추적)
   - UserEvent JPA 엔티티 + Flyway V10 user_events 테이블 (session_id/user_id/event_type/resource_id)
