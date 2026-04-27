@@ -14,7 +14,13 @@ spring:
       file-extensions: .graphqls
     websocket:
       path: /graphql-ws
-  
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:dummy-key-for-local}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.2
 
   data:
     redis:
@@ -162,4 +168,5 @@ org:
     dashboard:
       enabled: true
       port: 8000
+
 

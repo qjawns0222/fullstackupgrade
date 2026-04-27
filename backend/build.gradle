@@ -27,6 +27,7 @@ configurations {
 
 repositories {
     mavenCentral()
+    maven { url 'https://repo.spring.io/milestone' }
 }
 
 dependencyManagement {
@@ -187,6 +188,9 @@ dependencies {
 
     // Reactor Test: StepVerifier for GraphQL Subscription Flux testing
     testImplementation 'io.projectreactor:reactor-test'
+
+    // Spring AI: LLM Resume Scoring with OpenAI GPT-4o-mini
+    implementation 'org.springframework.ai:spring-ai-openai-spring-boot-starter:1.0.0-M6'
 }
 
 tasks.named('test') {
