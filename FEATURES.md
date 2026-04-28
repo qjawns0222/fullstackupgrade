@@ -77,6 +77,11 @@
 
 ## 캐시
 - 2레벨 캐시: L1 Caffeine(JVM, 30s) + L2 Redisson(Redis, 300s) + pub/sub 무효화
+- 캐시 워밍 전략 (Cache Warming on Startup + SSE 진행 스트림)
+  - WarmupResumeStore / WarmupTrendStore 포트 인터페이스 + JPA 어댑터 분리
+  - CacheWarmupService: ApplicationReadyEvent로 자동 워밍, progressListener 콜백으로 SSE 연동
+  - GET /api/cache-warmup/status (마지막 워밍 결과), POST /api/cache-warmup/trigger (SSE 스트림)
+  - 프론트엔드: /admin/cache-warmup 대시보드 (실시간 SSE 로그, 캐시 영역별 결과 테이블, 5s polling)
 
 ## 이벤트 소싱
 - 도메인 이벤트 append-only 감사 추적 (JPA EventStore)
