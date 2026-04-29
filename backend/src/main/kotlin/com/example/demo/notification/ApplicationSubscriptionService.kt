@@ -14,6 +14,10 @@ class ApplicationSubscriptionService {
         sink.tryEmitNext(event)
     }
 
+    fun publishNotification(event: ApplicationStatusChangedEvent) {
+        sink.tryEmitNext(event)
+    }
+
     fun statusChanges(): Flux<ApplicationStatusChangedEvent> =
         sink.asFlux()
 

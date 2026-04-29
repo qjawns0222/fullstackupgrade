@@ -9,12 +9,7 @@
 
 ---
 
-1. **실시간 알림 허브 (Notification Hub with Preferences)**
-   - 문제: WebSocket STOMP, GraphQL Subscription, Webhook이 각각 독립적으로 존재하며 사용자별 채널 선호도 관리가 없음
-   - 해결: NotificationChannel 열거형(STOMP/GRAPHQL/WEBHOOK/EMAIL) + UserNotificationPreference JPA 엔티티 — 단일 NotificationRouter가 선호도에 따라 채널 선택, /api/notifications/preferences CRUD API
-   - 신규 라이브러리: 추가 없음 (기존 인프라 통합)
-
-2. **쿼리 계획 캐싱 & 힌트 자동 주입 (Query Plan Cache + Hint Injection)**
+1. **쿼리 계획 캐싱 & 힌트 자동 주입 (Query Plan Cache + Hint Injection)**
    - 문제: SlowQueryListener가 느린 쿼리를 감지하고 EXPLAIN 분석까지 하지만, 동일 쿼리가 반복 느려져도 자동 힌트를 주입하지 않음
    - 해결: 동일 쿼리 패턴이 N회 이상 슬로우 감지되면 Hibernate QueryHint(USE INDEX) 또는 EntityManager 힌트를 동적으로 등록하는 QueryHintRegistry 구현
    - 신규 라이브러리: `net.ttddyy:datasource-proxy:1.10` (이미 있음)
