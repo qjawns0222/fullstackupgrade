@@ -1,108 +1,119 @@
-[Fullstack] 캐시 워밍 전략 - ApplicationReadyEvent + SSE로 콜드 스타트 DB 풀히트 없애기
+[Fullstack] 실시간 알림 허브 - STOMP·GraphQL Subscription·Webhook·Email을 단일 NotificationRouter로 통합하기
 
 ---
 
-2레벨 캐시(Caffeine + Redis)를 붙여두고 나서 한동안 뿌듯했다. L1 히트율이 높으면 Redis 왕복도 줄고, Redis 히트면 DB까지 안 간다. 이론적으로 완벽한 구조다.
+프로젝트를 돌아보다가 알림 발송 코드가 세 군데로 흩어져 있다는 걸 깨달았다. `JobCompletionNotificationListener`는 STOMP로 직접 쏘고, `ApplicationSubscriptionController`는 GraphQL Subscription용 `Sinks.Many`에 emit하고, `WebhookDeliveryService`는 OkHttp로 외부 엔드포인트에 POST한다. 각자 잘 동작하긴 하는데, "이 사용자한테 알림을 보내"라는 요청을 처리하려면 세 곳을 다 알아야 한다는 게 문제였다.
 
-그런데 배포 직후가 문제였다. 캐시가 완전히 비어있는 상태에서 트래픽이 들어오면, 처음 수백 건 요청이 전부 DB까지 직행한다. 운이 나쁘면 커넥션 풀이 순간적으로 고갈되고, 응답 시간이 튀는 게 보인다. 특히 이 프로젝트처럼 `resumeList`나 `trendStats`처럼 조회 빈도가 높은 데이터가 있으면 더 뼈아프다.
+더 불편한 건 사용자 선호도가 전혀 없다는 점이다. A는 브라우저 탭을 항상 열어두니 STOMP면 충분하고, B는 외부 시스템에 webhook을 걸어두고 싶고, C는 이메일을 원한다. 지금 구조로는 그 선택 자체가 불가능하다.
 
-해결 방법은 명확하다. 앱이 완전히 뜬 직후, 실제 트래픽이 들어오기 전에 캐시를 미리 채워두면 된다. 이른바 캐시 워밍(Cache Warming)이다.
+그래서 이번에 NotificationRouter 하나가 "이 사람의 활성 채널로 라우팅"하는 구조를 만들었다.
 
 ---
 
-Spring에서 "앱이 완전히 준비됐을 때"를 감지하는 이벤트는 `ApplicationReadyEvent`다. `@PostConstruct`와 헷갈리기 쉬운데, `@PostConstruct`는 Bean 초기화 단계에서 실행되기 때문에 다른 Bean이 아직 완전히 준비되지 않은 시점일 수 있다. `ApplicationReadyEvent`는 모든 Bean 초기화와 Flyway 마이그레이션, 커넥션 풀 준비까지 다 끝난 뒤에 발행된다. 워밍처럼 DB 접근이 필요한 초기화 로직에는 반드시 이쪽을 써야 한다.
+설계의 핵심은 두 가지다.
+
+첫째, 채널 선호도를 DB에 저장한다. `UserNotificationPreference` 엔티티에 `(user_id, channel)` 복합 유니크 키를 걸고, 채널은 `NotificationChannel` enum으로 고정했다.
 
 ```kotlin
-@EventListener(ApplicationReadyEvent::class)
-fun warmOnStartup() {
-    log.info("Cache warmup triggered by ApplicationReadyEvent")
-    runWarmup(progressListener = null)
+enum class NotificationChannel {
+    STOMP,
+    GRAPHQL,
+    WEBHOOK,
+    EMAIL
+}
+
+@Entity
+@Table(name = "user_notification_preferences")
+class UserNotificationPreference(
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    var id: Long? = null,
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id", nullable = false)
+    var user: User,
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    var channel: NotificationChannel,
+    @Column(nullable = false)
+    var enabled: Boolean = true,
+    var createdAt: LocalDateTime = LocalDateTime.now(),
+    var updatedAt: LocalDateTime = LocalDateTime.now()
+)
+```
+
+둘째, `NotificationDispatcher` 인터페이스를 뽑아서 Router가 구체 구현체(STOMP 템플릿, Sinks, OkHttp)를 직접 알지 못하게 했다. 이게 테스트를 단순하게 만드는 핵심이었다.
+
+```kotlin
+interface NotificationDispatcher {
+    fun dispatchStomp(userId: Long, event: NotificationEvent)
+    fun dispatchGraphql(userId: Long, event: NotificationEvent)
+    fun dispatchWebhook(userId: Long, event: NotificationEvent)
+    fun dispatchEmail(userId: Long, event: NotificationEvent)
 }
 ```
 
-실제 워밍 로직은 두 단계다. `trendStats`는 최근 12개 레코드를 꺼내 각 id를 키로 캐시에 넣고, `resumeList`는 전체 카운트를 `"count"` 키로 넣는다. 카운트 하나만 넣는 이유는 이력서 전체 목록은 수천 건이 될 수 있어서 메모리 부담이 크기 때문이다. 실제 서비스라면 자주 쓰는 페이지(1페이지)만 워밍하는 식으로 확장하면 된다.
+Router는 선호도 조회 → 활성 채널 추출 → 채널별 dispatch만 한다. 선호도가 없으면 STOMP가 기본이다.
 
 ```kotlin
-private fun warmTrendStats(listener: ((WarmupProgress) -> Unit)?): WarmupStepResult {
-    val cacheName = "trendStats"
-    return try {
-        listener?.invoke(WarmupProgress(cacheName, "시작"))
-        val stats = warmupTrendStore.findTop12()
-        val cache = cacheManager.getCache(cacheName)
-        stats.forEach { ts -> cache?.put(ts.id ?: return@forEach, ts) }
-        listener?.invoke(WarmupProgress(cacheName, "완료: ${stats.size}건"))
-        WarmupStepResult(cacheName, stats.size, null)
-    } catch (e: Exception) {
-        log.warn("[warmup] {} 실패: {}", cacheName, e.message)
-        WarmupStepResult(cacheName, 0, e.message)
-    }
-}
-```
+@Service
+class NotificationRouter(
+    private val preferenceStore: NotificationPreferenceStore,
+    private val dispatcher: NotificationDispatcher
+) {
+    fun route(userId: Long, event: NotificationEvent) {
+        val enabled = preferenceStore.findByUserId(userId)
+            .filter { it.enabled }
+            .map { it.channel }
+            .toSet()
+            .ifEmpty { setOf(NotificationChannel.STOMP) }
 
-한 가지 신경 쓴 부분은 `progressListener` 콜백이다. 워밍은 자동 실행이지만, 운영 중에 수동으로 다시 돌릴 필요가 생길 수도 있다. 그때 진행 상황을 실시간으로 보여주기 위해 SSE(Server-Sent Events)와 연결할 수 있도록 콜백을 열어뒀다.
-
-```kotlin
-@PostMapping("/trigger", produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
-fun trigger(): SseEmitter {
-    val emitter = SseEmitter(60_000L)
-
-    executor.submit {
-        cacheWarmupService.runWarmup { progress ->
-            emitter.send(
-                SseEmitter.event()
-                    .name("progress")
-                    .data("${progress.cacheName}: ${progress.message}")
-            )
+        enabled.forEach { channel ->
+            runCatching { dispatch(channel, userId, event) }
+                .onFailure { log.warn("Dispatch failed [channel=$channel]: ${it.message}") }
         }
-        emitter.send(SseEmitter.event().name("done").data("완료"))
-        emitter.complete()
     }
-
-    return emitter
 }
 ```
 
-SSE 엔드포인트를 별도 스레드(`VirtualThread`)에서 돌리는 건 중요하다. 워밍 작업이 메인 요청 스레드를 점유하면 타임아웃이 날 수 있다.
+`runCatching`으로 감싼 건 의도적이다. Webhook 엔드포인트가 죽어있어도 STOMP는 정상 발송돼야 한다. 채널 하나의 실패가 다른 채널을 막아선 안 된다.
 
 ---
 
-테스트 쪽은 포트 인터페이스 덕분에 깔끔하게 떨어졌다. 서비스가 `WarmupResumeStore`, `WarmupTrendStore` 인터페이스만 바라보니까, 테스트에선 Fake 구현 10줄로 끝난다. `SimpleCacheManager`에 `ConcurrentMapCache`를 꽂아서 실제 캐시 put/get 동작도 검증할 수 있었다.
+포트 인터페이스 패턴도 그대로 적용했다. `NotificationPreferenceStore`라는 얇은 인터페이스를 두고, 프로덕션에서는 `JpaNotificationPreferenceStore`가 구현하고, 테스트에서는 `FakeNotificationPreferenceStore`가 10줄짜리 in-memory 구현으로 대체한다.
 
 ```kotlin
-class FakeWarmupTrendStore : WarmupTrendStore {
-    var stats: List<TrendStats> = emptyList()
-    var shouldThrow: Boolean = false
-
-    override fun findTop12(): List<TrendStats> {
-        if (shouldThrow) throw RuntimeException("DB connection failed")
-        return stats
-    }
+interface NotificationPreferenceStore {
+    fun findByUserId(userId: Long): List<UserNotificationPreference>
+    fun findByUserIdAndChannel(userId: Long, channel: NotificationChannel): UserNotificationPreference?
+    fun save(pref: UserNotificationPreference): UserNotificationPreference
+    fun deleteByUserIdAndChannel(userId: Long, channel: NotificationChannel)
 }
 ```
 
-예외 상황 테스트도 `shouldThrow = true` 한 줄로 커버된다. 실제로 워밍 실패가 앱 기동을 막아서는 안 되기 때문에, `try-catch`로 감싸서 스텝 단위로 오류를 기록하고 계속 진행하는 구조로 만들었다.
+덕분에 테스트가 Spring Context 없이 순수 단위 테스트로 돌아간다. `FakeNotificationDispatcher`도 카운터만 세는 10줄짜리라서 "WEBHOOK이 활성화됐을 때 webhooks 카운터가 1인지"를 아주 명확하게 검증할 수 있다.
 
----
+```kotlin
+@Test
+fun `dispatch failure in one channel does not block others`() {
+    store.addPref(user, NotificationChannel.STOMP, enabled = true)
+    store.addPref(user, NotificationChannel.GRAPHQL, enabled = true)
+    dispatcher.graphqlThrows = true
 
-프론트엔드는 `/admin/cache-warmup` 페이지에 상태 카드, 스텝별 결과 테이블, 그리고 SSE 로그 뷰어를 붙였다. `EventSource`로 `/api/cache-warmup/trigger`를 구독하면 `progress` 이벤트가 날아오고, 완료되면 `done` 이벤트가 온다.
+    router.route(user.id!!, event)
 
-```typescript
-const es = new EventSource('/api/cache-warmup/trigger');
-
-es.addEventListener('progress', (e) => {
-  setLogs((prev) => [...prev, `[진행] ${e.data}`]);
-});
-
-es.addEventListener('done', (e) => {
-  setLogs((prev) => [...prev, `[완료] ${e.data}`]);
-  es.close();
-  setRunning(false);
-  refetch();
-});
+    assertEquals(1, dispatcher.stomps)
+}
 ```
 
 ---
 
-구현하면서 느낀 건, 캐시 워밍 자체는 개념이 단순한데 "어떤 데이터를 얼마나 워밍할 것인가"가 진짜 고민이라는 점이다. 전체 이력서를 다 올리면 메모리 폭탄이고, 너무 적게 워밍하면 효과가 없다. 이 프로젝트에서는 집계성 데이터(trendStats 12개)와 카운트 정도만 올리는 걸로 타협했다. 실제 서비스라면 접근 패턴 분석 → 상위 N%를 워밍하는 식으로 발전시켜야 한다.
+구현 중에 두 가지 문제가 있었다.
 
-워밍 대상은 `TwoLevelCacheProperties.cacheNames`에 이미 정의된 이름들(`dashboard`, `jobApplications`, `resumeList`, `trendStats`)과 자연스럽게 맞물린다. 캐시 영역을 추가할 때 워밍 로직도 함께 고민하게 되는 구조가 만들어진 셈이다.
+하나는 Flyway 마이그레이션 버전 충돌이다. `V10__add_user_events_table.sql`이 이미 존재하는 걸 모르고 `V10__add_notification_preferences.sql`로 만들었다. H2 테스트 실행 시 "Found more than one migration with version 10" 에러가 나서야 알았다. 결국 `V13`으로 변경해서 해결했다. 마이그레이션 파일 번호는 기존 파일 전체를 확인하고 나서 부여해야 한다는 걸 다시 한번 배웠다.
+
+다른 하나는 ArchUnit 사이클 테스트다. 처음에 `DefaultNotificationDispatcher`에서 `MailService`를 직접 주입받았는데, `notification` → `service` 의존이 생기면서 `noCyclicDependencies` 규칙에 걸렸다. EMAIL 채널은 실제 발송보다는 JobRunr 큐잉이 목적이라 dispatcher 구현에서 `MailService`를 제거하고 로그로만 처리했다. 나중에 실제 EMAIL 발송이 필요하면 별도 서비스 레이어로 분리하면 된다.
+
+---
+
+REST API는 `/api/notifications/preferences`로 GET/PUT/DELETE를 제공하고, `/api/notifications/preferences/test`로 직접 발송 테스트가 가능하다. Next.js admin 페이지도 `/admin/notification-hub`에 함께 만들었다. 채널별 토글 + 5초 폴링으로 상태를 실시간 반영한다.
+
+이제 어디서든 알림을 보내고 싶으면 `notificationRouter.route(userId, event)` 한 줄이면 된다. 채널 로직은 Router 안에 캡슐화됐다.

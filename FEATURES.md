@@ -34,6 +34,15 @@
   - GET /api/baggage/current, /snapshot, POST /api/baggage/set REST API
   - 프론트엔드: /admin/baggage 대시보드 (Baggage 실시간 조회·설정, 전파 경로 설명)
 
+## 알림 / 이벤트
+- 실시간 알림 허브 (Notification Hub with Preferences)
+  - NotificationChannel enum (STOMP/GRAPHQL/WEBHOOK/EMAIL) + UserNotificationPreference JPA 엔티티 (Flyway V13)
+  - NotificationPreferenceStore 포트 인터페이스 + JpaNotificationPreferenceStore 어댑터
+  - NotificationDispatcher 인터페이스로 구체 채널 구현 캡슐화 (DefaultNotificationDispatcher)
+  - NotificationRouter: 사용자 활성 채널 조회 → 채널별 dispatch, 선호도 없으면 STOMP 기본, 채널 실패 격리(runCatching)
+  - GET/PUT/DELETE /api/notifications/preferences CRUD API + POST /test 발송 테스트
+  - 프론트엔드: /admin/notification-hub 대시보드 (채널 토글, 5s polling, 테스트 발송)
+
 ## API 변경 관리
 - API Breaking Change 자동 감지 (openapi-diff-core 2.1.0)
   - ApplicationReadyEvent 시 /v3/api-docs 스냅샷 자동 캡처 + DB 저장
