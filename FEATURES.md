@@ -84,6 +84,16 @@
 - GraphQL API (Spring for GraphQL + DataLoader N+1 방지)
 - JSON Schema 계약 검증 (networknt/json-schema-validator + @ValidateJsonSchema AOP)
 
+## 쿼리 모니터링
+- 쿼리 계획 캐싱 & 힌트 자동 주입 (Query Plan Cache + Hint Auto-Injection)
+  - QueryHintRegistry: normalized SQL별 슬로우 횟수 ConcurrentHashMap 추적, 임계값(기본 3회) 도달 시 Optimizer Hint 자동 등록
+  - QueryHintInterceptor: Hibernate StatementInspector 구현 — 힌트 등록 패턴에 `/*+ NO_FILESORT */` / `/*+ USE_INDEX_MERGE */` / `/*+ MAX_EXECUTION_TIME(5000) */` 자동 주입
+  - HibernateStatementInspectorConfig: HibernatePropertiesCustomizer로 StatementInspector 빈 등록
+  - SlowQueryListener: 슬로우 감지 시 hintRegistry.record() 연동
+  - QueryMonitorProperties: hintThreshold 설정 추가 (query.monitor.hint-threshold)
+  - GET /api/query-hints (등록 힌트 목록), DELETE /api/query-hints?sql= (개별 제거), DELETE /api/query-hints/all (전체 초기화)
+  - 프론트엔드: /admin/query-hint 대시보드 (5s polling, 힌트 종류별 배지, 개별/전체 제거)
+
 ## 캐시
 - 2레벨 캐시: L1 Caffeine(JVM, 30s) + L2 Redisson(Redis, 300s) + pub/sub 무효화
 - 캐시 워밍 전략 (Cache Warming on Startup + SSE 진행 스트림)
