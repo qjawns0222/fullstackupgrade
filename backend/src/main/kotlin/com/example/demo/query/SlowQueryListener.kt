@@ -14,7 +14,8 @@ class SlowQueryListener(
     private val slowQueryThresholdMs: Long,
     private val n1ThresholdCount: Int,
     private val inspector: QueryInspector,
-    private val explainService: SlowQueryExplainService? = null
+    private val explainService: SlowQueryExplainService? = null,
+    private val hintRegistry: QueryHintRegistry? = null
 ) : QueryExecutionListener {
 
     override fun beforeQuery(execInfo: ExecutionInfo, queryInfoList: MutableList<QueryInfo>) {
@@ -44,6 +45,8 @@ class SlowQueryListener(
                 if (isSelectQuery(sql)) {
                     explainService?.analyzeSlowQuery(sql, elapsedMs)
                 }
+                // Record hit in hint registry; promotes to hint after threshold
+                hintRegistry?.record(normalized)
             }
 
             // --- N+1 Check ---

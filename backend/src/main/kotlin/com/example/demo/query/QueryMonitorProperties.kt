@@ -10,5 +10,7 @@ data class QueryMonitorProperties(
     @DefaultValue("300")
     val slowQueryThresholdMs: Long = 300L,
     @DefaultValue("5")
-    val n1ThresholdCount: Int = 5
+    val n1ThresholdCount: Int = 5,
+    @DefaultValue("3")
+    val hintThreshold: Int = 3
 )

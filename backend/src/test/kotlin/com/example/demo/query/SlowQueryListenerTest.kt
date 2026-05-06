@@ -4,6 +4,7 @@ import net.ttddyy.dsproxy.ExecutionInfo
 import net.ttddyy.dsproxy.QueryInfo
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.ArgumentCaptor
@@ -129,5 +130,60 @@ class SlowQueryListenerTest {
         listener.afterQuery(buildExecutionInfo(300L), mutableListOf(buildQueryInfo("SELECT 1")))
 
         assertEquals(1, inspector.slowQueryEvents.size)
+    }
+
+    @Test
+    fun `hintRegistry records slow query hit`() {
+        val inspector = FakeQueryInspector()
+        val registry = QueryHintRegistry(hintThreshold = 3)
+        val listener = SlowQueryListener(
+            slowQueryThresholdMs = 100L,
+            n1ThresholdCount = 100,
+            inspector = inspector,
+            hintRegistry = registry
+        )
+        val sql = "SELECT * FROM resumes WHERE id = 1"
+
+        listener.afterQuery(buildExecutionInfo(200L), mutableListOf(buildQueryInfo(sql)))
+
+        assertEquals(1, registry.slowCount(QueryExecutionContext.normalize(sql)))
+    }
+
+    @Test
+    fun `hintRegistry promotes to hint after threshold`() {
+        val inspector = FakeQueryInspector()
+        val registry = QueryHintRegistry(hintThreshold = 2)
+        val listener = SlowQueryListener(
+            slowQueryThresholdMs = 100L,
+            n1ThresholdCount = 100,
+            inspector = inspector,
+            hintRegistry = registry
+        )
+        val sql = "SELECT * FROM resumes WHERE id = 1"
+
+        repeat(2) {
+            listener.afterQuery(buildExecutionInfo(200L), mutableListOf(buildQueryInfo(sql)))
+        }
+
+        assertTrue(registry.isRegistered(QueryExecutionContext.normalize(sql)))
+    }
+
+    @Test
+    fun `hintRegistry not updated for fast queries`() {
+        val inspector = FakeQueryInspector()
+        val registry = QueryHintRegistry(hintThreshold = 2)
+        val listener = SlowQueryListener(
+            slowQueryThresholdMs = 300L,
+            n1ThresholdCount = 100,
+            inspector = inspector,
+            hintRegistry = registry
+        )
+        val sql = "SELECT * FROM resumes WHERE id = 1"
+
+        repeat(5) {
+            listener.afterQuery(buildExecutionInfo(50L), mutableListOf(buildQueryInfo(sql)))
+        }
+
+        assertEquals(0, registry.slowCount(QueryExecutionContext.normalize(sql)))
     }
 }

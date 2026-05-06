@@ -1,5 +1,6 @@
 package com.example.demo.config
 
+import com.example.demo.query.QueryHintRegistry
 import com.example.demo.query.QueryInspector
 import com.example.demo.query.QueryMonitorProperties
 import com.example.demo.query.SlowQueryExplainService
@@ -25,18 +26,24 @@ import javax.sql.DataSource
 class DataSourceProxyConfig {
 
     @Bean
+    fun queryHintRegistry(properties: QueryMonitorProperties): QueryHintRegistry =
+        QueryHintRegistry(hintThreshold = properties.hintThreshold)
+
+    @Bean
     @Primary
     fun proxyDataSource(
         @Qualifier("dataSource") original: DataSource,
         properties: QueryMonitorProperties,
         inspector: QueryInspector,
-        explainService: SlowQueryExplainService
+        explainService: SlowQueryExplainService,
+        queryHintRegistry: QueryHintRegistry
     ): DataSource {
         val listener = SlowQueryListener(
             slowQueryThresholdMs = properties.slowQueryThresholdMs,
             n1ThresholdCount = properties.n1ThresholdCount,
             inspector = inspector,
-            explainService = explainService
+            explainService = explainService,
+            hintRegistry = queryHintRegistry
         )
 
         return ProxyDataSourceBuilder
