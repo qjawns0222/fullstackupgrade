@@ -1,112 +1,133 @@
-[Fullstack] 쿼리 계획 캐싱 & 힌트 자동 주입 - 반복 슬로우 쿼리에 Optimizer Hint를 동적으로 꽂다
+[Fullstack] A/B 테스트 프레임워크 - Unleash Variant API로 메서드 단위 코호트 실험을 꽂다
 
 ---
 
-슬로우 쿼리 감지 기능을 만들고 나서 한동안 뿌듯했다. `SlowQueryListener`가 300ms 넘는 쿼리를 잡아내고, EXPLAIN 결과를 Elasticsearch에 저장하고, 프론트엔드 대시보드에 경고를 띄우는 것까지 잘 돌아갔다. 그런데 어느 날 대시보드를 보다가 불편한 걸 발견했다. 같은 SQL 패턴이 계속 올라오고 있었다. "이미 알고 있어, 근데 아무것도 안 하잖아." 감지만 하고 대응이 없다. 진단 도구가 경고를 반복 출력하는 것뿐이라면 결국 알림 피로만 쌓인다.
+Unleash Feature Flag를 쓰면서 항상 아쉬웠던 게 있었다. 켜짐/꺼짐은 잘 됐는데, "어떤 사용자에게 어떤 UI를 보여줬고 그 결과가 어땠는지"를 체계적으로 추적하는 구조가 없었다. isEnabled()로 분기는 가능하지만, 실험 결과를 DB에 남기고 통계를 뽑으려면 그걸 호출하는 쪽에서 직접 저장 로직을 넣어야 했다. 기능마다 반복되는 보일러플레이트였고, 나중에 퍼널 분석과 연결하려면 더 복잡해질 게 뻔했다.
 
-그래서 이번엔 감지에서 멈추지 않고, 동일 패턴이 N회 이상 느려지면 Hibernate에 Optimizer Hint를 자동으로 주입하는 구조를 만들었다.
+그래서 이번엔 `@ABTest` 어노테이션 하나로 메서드에 실험을 붙이고, AOP가 variant 배정과 기록을 전부 처리하는 구조를 만들었다.
 
 ---
 
-설계는 두 레이어로 나뉜다.
+설계의 핵심은 두 가지다.
 
-첫째는 `QueryHintRegistry`다. normalized SQL별로 슬로우 감지 횟수를 `ConcurrentHashMap<String, AtomicInteger>`로 추적하고, 횟수가 임계값(기본 3회)에 도달하는 순간 힌트 엔트리를 등록한다.
+첫째, Unleash의 `getVariant(toggleName, context)` API를 활용한다. `isEnabled()`는 켜짐/꺼짐만 알려주지만, `getVariant()`는 `Variant` 객체를 반환하는데 여기에 `name` (A/B/control 같은 variant 이름), `payload` (JSON이나 문자열 페이로드), `enabled` (토글이 켜져 있는지)가 담겨 있다. 토글이 꺼져 있으면 `Variant.DISABLED_VARIANT`가 반환되고 name은 "disabled"다. 이걸 그대로 저장하면 실험 미노출도 추적 가능하다.
 
-```kotlin
-class QueryHintRegistry(private val hintThreshold: Int = 3) {
-
-    private val slowCounts: ConcurrentHashMap<String, AtomicInteger> = ConcurrentHashMap()
-    private val hints: ConcurrentHashMap<String, QueryHintEntry> = ConcurrentHashMap()
-
-    fun record(normalizedSql: String): Boolean {
-        val count = slowCounts.getOrPut(normalizedSql) { AtomicInteger(0) }.incrementAndGet()
-        if (count == hintThreshold && !hints.containsKey(normalizedSql)) {
-            val hint = buildHint(normalizedSql)
-            hints[normalizedSql] = QueryHintEntry(
-                normalizedSql = normalizedSql,
-                hint = hint,
-                slowCount = count,
-                registeredAt = LocalDateTime.now()
-            )
-            return true
-        }
-        return false
-    }
-
-    private fun buildHint(normalizedSql: String): String {
-        val upper = normalizedSql.uppercase()
-        return when {
-            upper.contains("ORDER BY") -> "/*+ NO_FILESORT */"
-            upper.contains("JOIN") -> "/*+ USE_INDEX_MERGE */"
-            else -> "/*+ MAX_EXECUTION_TIME(5000) */"
-        }
-    }
-}
-```
-
-힌트 선택 로직은 단순하게 갔다. ORDER BY가 있으면 파일 정렬 방지, JOIN이 있으면 인덱스 머지, 나머지는 실행 시간 제한. 정교한 쿼리 분석기를 만들 수도 있었지만, 지금 목적은 "반복 슬로우 쿼리를 자동으로 억제하는 것"이지 완벽한 옵티마이저가 아니다.
-
-둘째는 `QueryHintInterceptor`다. Hibernate의 `StatementInspector` 인터페이스를 구현해서, 실제 SQL이 실행되기 직전에 레지스트리를 조회하고 힌트를 앞에 붙인다.
+둘째, `AbTestVariantHolder`라는 ThreadLocal 홀더다. AOP가 variant를 결정한 뒤 ThreadLocal에 넣어두면, 메서드 내부에서 `AbTestVariantHolder.get()`으로 현재 variant를 꺼낼 수 있다. finally 블록에서 반드시 clear()한다.
 
 ```kotlin
-class QueryHintInterceptor(private val registry: QueryHintRegistry) : StatementInspector {
+@Aspect
+@Component
+class AbTestAspect(
+    private val unleash: Unleash,
+    private val service: AbTestService
+) {
+    @Around("@annotation(abTest)")
+    fun applyVariant(joinPoint: ProceedingJoinPoint, abTest: ABTest): Any? {
+        val context = UnleashContext.builder().build()
+        val variant = unleash.getVariant(abTest.toggleName, context)
 
-    override fun inspect(sql: String): String {
-        val normalized = QueryExecutionContext.normalize(sql)
-        val hint = registry.getHint(normalized) ?: return sql
-        return "$hint $sql"
+        AbTestVariantHolder.set(variant.name)
+        return try {
+            val result = joinPoint.proceed()
+            if (abTest.trackEvent) {
+                val payload = variant.payload.map { it.value }.orElse(null)
+                service.recordVariant(
+                    toggleName = abTest.toggleName,
+                    variantName = variant.name,
+                    userId = null,
+                    sessionId = null,
+                    payload = payload
+                )
+            }
+            result
+        } finally {
+            AbTestVariantHolder.clear()
+        }
     }
 }
 ```
 
-`QueryExecutionContext.normalize()`는 이미 N+1 감지용으로 만들어둔 함수라서 그대로 재사용했다. 숫자 리터럴과 문자열 리터럴을 `?`로 치환해서 `WHERE id = 1`과 `WHERE id = 42`가 같은 패턴으로 인식되게 한다.
-
----
-
-Hibernate에 StatementInspector를 주입하는 방법이 처음엔 막막했다. 공식 문서를 찾아보니 `HibernatePropertiesCustomizer` 빈을 등록해서 `hibernate.session_factory.statement_inspector` 프로퍼티에 인스턴스를 넣으면 된다.
+어노테이션 사용은 이렇게 된다.
 
 ```kotlin
-@Configuration
-class HibernateStatementInspectorConfig {
-
-    @Bean
-    fun queryHintHibernateCustomizer(registry: QueryHintRegistry): HibernatePropertiesCustomizer =
-        HibernatePropertiesCustomizer { props ->
-            props[AvailableSettings.STATEMENT_INSPECTOR] = QueryHintInterceptor(registry)
-        }
+@ABTest(toggleName = "checkout-flow", trackEvent = true)
+fun renderCheckout(userId: String): CheckoutView {
+    return when (AbTestVariantHolder.get()) {
+        "B" -> newCheckoutView(userId)
+        else -> legacyCheckoutView(userId)
+    }
 }
 ```
 
-`AvailableSettings.STATEMENT_INSPECTOR`가 문자열 상수 오타를 방지해준다. 이런 건 직접 문자열로 쓰지 않는 게 맞다.
+메서드 안에서 variant 이름으로 분기하는 게 전부다. AOP가 Unleash 호출과 DB 저장을 처리하기 때문에 비즈니스 로직에 실험 코드가 섞이지 않는다.
 
 ---
 
-`SlowQueryListener`에는 `hintRegistry?.record(normalized)` 한 줄만 추가했다. null 안전 호출로 처리해서 `DataSourceProxyConfig`에서 registry가 없는 환경(테스트 등)에서도 안전하게 동작한다.
+데이터 레이어는 포트 인터페이스 패턴으로 분리했다. `AbTestStore`가 서비스가 의존하는 인터페이스고, `JpaAbTestStore`가 실제 MariaDB 구현이다. 테스트에서는 `FakeAbTestStore`를 10줄로 만들어서 쓴다.
 
-`QueryMonitorProperties`에 `hintThreshold` 설정을 추가해서 `application.yml`에서 조정 가능하게 했다.
+```kotlin
+interface AbTestStore {
+    fun save(result: AbTestResult): AbTestResult
+    fun countByToggleAndVariantSince(toggleName: String, since: LocalDateTime): Map<String, Long>
+    fun findRecentByToggle(toggleName: String, limit: Int): List<AbTestResult>
+}
+```
 
-```yaml
-query:
-  monitor:
-    hint-threshold: 3
+통계 쿼리는 JPQL GROUP BY로 처리했다.
+
+```kotlin
+@Query("""
+    SELECT a.variantName, COUNT(a) FROM AbTestResult a
+    WHERE a.toggleName = :toggleName AND a.recordedAt >= :since
+    GROUP BY a.variantName
+""")
+fun countByVariantSince(toggleName: String, since: LocalDateTime): List<Array<Any>>
 ```
 
 ---
 
-구현하면서 예상치 못한 부분이 있었다. `StatementInspector`는 Hibernate가 SQL을 생성한 직후, JDBC로 넘기기 직전에 호출된다. 즉 datasource-proxy의 `afterQuery`와는 실행 시점이 다르다. registry에 힌트가 등록되는 건 `afterQuery`(실행 후)고, 힌트가 주입되는 건 `inspect`(실행 전)다. 따라서 힌트 주입은 정확히 threshold+1번째 실행부터 적용된다. 처음 3번은 느리게 실행되고, 4번째부터 힌트가 붙는다. 이게 의도한 동작이기도 하고, 어차피 이미 느린 쿼리에 대한 사후 조치이므로 문제없다.
+구현 중에 실수가 하나 있었다. Flyway 마이그레이션을 V10으로 만들었는데, `V10__add_user_events_table.sql`이 이미 존재했다. 팀에서 쓰는 Flyway는 같은 버전 번호를 감지하면 바로 FlywayException을 던지고 컨텍스트 로딩이 실패한다. 당연히 SchemaMigrationTest가 터졌고, 그 컨텍스트 오염으로 JwtAuthenticationFilterTest 등 전혀 관련 없는 테스트들도 도미노처럼 실패했다. V14로 변경해서 해결했다.
+
+또 H2 인라인 INDEX 문법 문제도 있었다. MariaDB에서는 CREATE TABLE 안에 `INDEX idx_name (col)` 형태가 가능하지만, H2는 이걸 모른다. `Unknown data type: "IDX_ABT_TOGGLE_RECORDED"` 에러가 떴다. CREATE INDEX를 별도 문장으로 분리하는 것으로 해결했다.
+
+```sql
+CREATE TABLE IF NOT EXISTS ab_test_results (
+    id           BIGINT NOT NULL AUTO_INCREMENT,
+    toggle_name  VARCHAR(100) NOT NULL,
+    variant_name VARCHAR(100) NOT NULL,
+    user_id      VARCHAR(100),
+    session_id   VARCHAR(100),
+    payload      TEXT,
+    recorded_at  DATETIME NOT NULL,
+    PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_abt_toggle_recorded ON ab_test_results (toggle_name, recorded_at);
+```
+
+H2 호환을 체크하는 SchemaMigrationTest가 이런 이슈를 잡아주는 게 역시 중요하다.
 
 ---
 
-REST API는 간단하게 뽑았다.
+테스트는 FakeUnleash를 적극 활용했다. Unleash 공식 JAR에 `FakeUnleash`가 내장돼 있고, `setVariant(toggleName, Variant)` 메서드로 원하는 variant를 주입할 수 있다.
 
+```kotlin
+@Test
+fun `getVariant records result in store`() {
+    fakeUnleash.enable("my-toggle")
+    fakeUnleash.setVariant("my-toggle", Variant("B", null as String?, true))
+
+    service.getVariant("my-toggle", userId = "user1", sessionId = "sess-1")
+
+    assertEquals(1, fakeStore.saved.size)
+    assertEquals("B", fakeStore.saved.first().variantName)
+}
 ```
-GET  /api/query-hints       → 등록된 힌트 전체 목록
-DELETE /api/query-hints?sql=... → 특정 패턴 힌트 제거
-DELETE /api/query-hints/all     → 전체 초기화
-```
 
-프론트엔드 `/admin/query-hint` 페이지는 기존 DLQ 대시보드 스타일을 따라서 5초 폴링으로 현황을 보여주고, 개별 힌트 제거와 전체 초기화 버튼을 달았다.
+Kotlin에서 `Variant("B", null as String?, true)` — null에 타입 캐스팅이 필요한 게 약간 어색하지만, 생성자 오버로딩 매칭 때문에 어쩔 수 없었다.
 
-테스트는 `QueryHintRegistry`와 `QueryHintInterceptor`를 순수 단위 테스트로 작성했다. Spring Context 없이 인스턴스를 직접 생성하는 방식이라 빠르고 격리가 잘 된다. "threshold 정확히 도달 시 true 반환", "ORDER BY면 NO_FILESORT 힌트", "remove 후 카운트 초기화" 같은 케이스들을 명시적으로 검증했다.
+---
 
-이제 슬로우 쿼리 대시보드가 단순한 경보 장치가 아니라, 반복 문제에 자동으로 대응하는 구조가 됐다.
+프론트엔드는 `/admin/ab-test` 페이지로 만들었다. variant 배정 테스트 폼, 토글별 분포 바 차트, 최근 배정 이력 테이블을 5초 polling으로 보여준다. Unleash 서버가 없는 환경에서는 "disabled" variant가 100% 나오지만 그것도 데이터로 기록된다.
+
+지금 구조는 AOP에서 사용자 ID를 null로 처리하고 있는데, 실제로는 Spring Security의 SecurityContextHolder에서 현재 로그인 사용자를 꺼내 넣어주는 게 맞다. 다음 단계로 퍼널 이벤트(`UserEvent`)와 연결할 때 같이 처리할 것 같다.

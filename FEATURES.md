@@ -12,6 +12,13 @@
   - 프론트엔드: /admin/resume-scoring 대시보드 (점수 바 차트, 통계 카드, 5s polling, 상세 펼치기)
 
 ## 사용자 행동 분석
+- A/B 테스트 프레임워크 (Unleash Variant API + @ABTest AOP)
+  - @ABTest(toggleName, trackEvent) 어노테이션으로 메서드 단위 variant 분기
+  - AbTestAspect: getVariant() 호출 → AbTestVariantHolder ThreadLocal에 variant 저장 → finally 블록에서 clear()
+  - AbTestStore 포트 인터페이스 + JpaAbTestStore 어댑터 (Flyway V14 ab_test_results 테이블)
+  - AbTestService: variant 배정, 기간별 variant 분포 통계, 최근 이력 조회
+  - POST /api/ab-test/assign, GET /api/ab-test/stats/{toggle}, GET /api/ab-test/results/{toggle}
+  - 프론트엔드: /admin/ab-test 대시보드 (variant 배정 폼, 분포 바 차트, 이력 테이블, 5s polling)
 - 퍼널 분석 (이력서 조회→저장→다운로드 전환율 추적)
   - UserEvent JPA 엔티티 + Flyway V10 user_events 테이블 (session_id/user_id/event_type/resource_id)
   - UserEventStore 포트 인터페이스 + JpaUserEventStore 어댑터 (JPQL COUNT DISTINCT 집계)
