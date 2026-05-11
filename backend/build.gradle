@@ -189,6 +189,9 @@ dependencies {
     // Reactor Test: StepVerifier for GraphQL Subscription Flux testing
     testImplementation 'io.projectreactor:reactor-test'
 
+    // Reactive Backpressure Pipeline: WebFlux Flux for async audit log processing
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+
     // Spring AI: LLM Resume Scoring with OpenAI GPT-4o-mini
     implementation 'org.springframework.ai:spring-ai-openai-spring-boot-starter:1.0.0-M6'
 }
