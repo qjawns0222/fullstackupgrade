@@ -1,133 +1,137 @@
-[Fullstack] A/B 테스트 프레임워크 - Unleash Variant API로 메서드 단위 코호트 실험을 꽂다
+[Fullstack] 백프레셔 제어 비동기 파이프라인 - RabbitMQ 메시지 폭주를 Reactor Flux로 막다
 
 ---
 
-Unleash Feature Flag를 쓰면서 항상 아쉬웠던 게 있었다. 켜짐/꺼짐은 잘 됐는데, "어떤 사용자에게 어떤 UI를 보여줬고 그 결과가 어땠는지"를 체계적으로 추적하는 구조가 없었다. isEnabled()로 분기는 가능하지만, 실험 결과를 DB에 남기고 통계를 뽑으려면 그걸 호출하는 쪽에서 직접 저장 로직을 넣어야 했다. 기능마다 반복되는 보일러플레이트였고, 나중에 퍼널 분석과 연결하려면 더 복잡해질 게 뻔했다.
+감사 로그 파이프라인이 언제 터질지 모른다는 불안감이 있었다.
 
-그래서 이번엔 `@ABTest` 어노테이션 하나로 메서드에 실험을 붙이고, AOP가 variant 배정과 기록을 전부 처리하는 구조를 만들었다.
+`@RabbitListener`가 메시지를 받으면 Elasticsearch에 건건이 동기 저장한다. 평소엔 문제없다. 그런데 트래픽이 몰려서 RabbitMQ에 메시지가 쌓이기 시작하면? Spring AMQP의 기본 concurrency는 스레드 풀로 돌아가는데, ES 응답이 느려지면 그 스레드들이 전부 I/O 대기 상태로 막힌다. 스레드 풀이 고갈되면 새 메시지 처리가 밀리고, 결국 RabbitMQ consumer가 멈추는 상황이 올 수 있다.
+
+배치 저장도 없었다. 메시지 100개가 오면 ES에 100번 HTTP 요청을 보낸다. 비효율도 비효율이지만, ES가 잠깐 느려지는 순간 그 100개가 전부 블로킹 대기로 쌓인다.
+
+해결 방향은 명확했다. `@RabbitListener`는 메시지를 받는 즉시 Reactor `Sink`에 emit만 하고 리턴한다. 실제 저장은 Flux 파이프라인이 비동기로 처리한다. 버퍼가 있으니 ES가 잠깐 느려져도 메시지가 버퍼에서 기다리고, 스레드 풀은 자유롭다.
 
 ---
 
-설계의 핵심은 두 가지다.
-
-첫째, Unleash의 `getVariant(toggleName, context)` API를 활용한다. `isEnabled()`는 켜짐/꺼짐만 알려주지만, `getVariant()`는 `Variant` 객체를 반환하는데 여기에 `name` (A/B/control 같은 variant 이름), `payload` (JSON이나 문자열 페이로드), `enabled` (토글이 켜져 있는지)가 담겨 있다. 토글이 꺼져 있으면 `Variant.DISABLED_VARIANT`가 반환되고 name은 "disabled"다. 이걸 그대로 저장하면 실험 미노출도 추적 가능하다.
-
-둘째, `AbTestVariantHolder`라는 ThreadLocal 홀더다. AOP가 variant를 결정한 뒤 ThreadLocal에 넣어두면, 메서드 내부에서 `AbTestVariantHolder.get()`으로 현재 variant를 꺼낼 수 있다. finally 블록에서 반드시 clear()한다.
+핵심은 `ReactiveAuditPipeline`이다.
 
 ```kotlin
-@Aspect
 @Component
-class AbTestAspect(
-    private val unleash: Unleash,
-    private val service: AbTestService
-) {
-    @Around("@annotation(abTest)")
-    fun applyVariant(joinPoint: ProceedingJoinPoint, abTest: ABTest): Any? {
-        val context = UnleashContext.builder().build()
-        val variant = unleash.getVariant(abTest.toggleName, context)
+class ReactiveAuditPipeline(private val auditLogStore: AuditLogStore) {
 
-        AbTestVariantHolder.set(variant.name)
-        return try {
-            val result = joinPoint.proceed()
-            if (abTest.trackEvent) {
-                val payload = variant.payload.map { it.value }.orElse(null)
-                service.recordVariant(
-                    toggleName = abTest.toggleName,
-                    variantName = variant.name,
-                    userId = null,
-                    sessionId = null,
-                    payload = payload
-                )
+    private val sink = Sinks.many().multicast().onBackpressureBuffer<AuditLogMessage>(1000)
+
+    @PostConstruct
+    fun start() {
+        sink.asFlux()
+            .onBackpressureBuffer(1000) { dropped ->
+                droppedCount.incrementAndGet()
+                log.warn("Audit message dropped due to backpressure: action={}", dropped.action)
             }
-            result
-        } finally {
-            AbTestVariantHolder.clear()
+            .bufferTimeout(50, Duration.ofMillis(100))
+            .filter { it.isNotEmpty() }
+            .publishOn(Schedulers.boundedElastic())
+            .subscribe(
+                { batch -> processBatch(batch) },
+                { err -> log.error("Audit pipeline error", err) }
+            )
+    }
+
+    fun emit(message: AuditLogMessage) {
+        val result = sink.tryEmitNext(message)
+        if (result.isFailure) {
+            droppedCount.incrementAndGet()
         }
     }
 }
 ```
 
-어노테이션 사용은 이렇게 된다.
+`Sinks.many().multicast().onBackpressureBuffer(1000)` — 이 Sink는 구독자가 없어도 최대 1000개를 버퍼에 보관한다. emit은 논블로킹이라 `@RabbitListener` 스레드가 즉시 리턴한다.
+
+`bufferTimeout(50, Duration.ofMillis(100))` — 50개가 쌓이거나 100ms가 지나면 리스트로 묶어 내려보낸다. 이게 배치 저장의 트리거다.
+
+`publishOn(Schedulers.boundedElastic())` — ES HTTP 호출처럼 블로킹 I/O가 있는 작업을 별도 스레드 풀에서 실행한다. 메인 이벤트 루프를 막지 않는다.
+
+`AuditLogConsumer`는 이제 이렇게 단순해졌다.
 
 ```kotlin
-@ABTest(toggleName = "checkout-flow", trackEvent = true)
-fun renderCheckout(userId: String): CheckoutView {
-    return when (AbTestVariantHolder.get()) {
-        "B" -> newCheckoutView(userId)
-        else -> legacyCheckoutView(userId)
+@RabbitListener(queues = [RabbitMqConfig.AUDIT_QUEUE])
+fun receiveAuditLog(message: AuditLogMessage) {
+    pipeline.emit(message)
+}
+```
+
+받자마자 Sink에 던지고 끝이다. ES 응답 속도와 무관하게 스레드가 바로 풀린다.
+
+---
+
+데이터 레이어는 포트 인터페이스로 분리했다.
+
+```kotlin
+interface AuditLogStore {
+    fun saveAll(documents: List<AuditLogDocument>)
+}
+
+@Component
+class JpaAuditLogStore(private val repository: AuditLogRepository) : AuditLogStore {
+    override fun saveAll(documents: List<AuditLogDocument>) {
+        repository.saveAll(documents)
     }
 }
 ```
 
-메서드 안에서 variant 이름으로 분기하는 게 전부다. AOP가 Unleash 호출과 DB 저장을 처리하기 때문에 비즈니스 로직에 실험 코드가 섞이지 않는다.
-
----
-
-데이터 레이어는 포트 인터페이스 패턴으로 분리했다. `AbTestStore`가 서비스가 의존하는 인터페이스고, `JpaAbTestStore`가 실제 MariaDB 구현이다. 테스트에서는 `FakeAbTestStore`를 10줄로 만들어서 쓴다.
+서비스가 `ElasticsearchRepository`를 직접 알 필요가 없다. 테스트에서 `FakeAuditLogStore`를 10줄로 만들어 쓸 수 있다.
 
 ```kotlin
-interface AbTestStore {
-    fun save(result: AbTestResult): AbTestResult
-    fun countByToggleAndVariantSince(toggleName: String, since: LocalDateTime): Map<String, Long>
-    fun findRecentByToggle(toggleName: String, limit: Int): List<AbTestResult>
+class FakeAuditLogStore : AuditLogStore {
+    val saved = mutableListOf<AuditLogDocument>()
+    var shouldFail = false
+
+    override fun saveAll(documents: List<AuditLogDocument>) {
+        if (shouldFail) throw RuntimeException("Simulated ES failure")
+        saved.addAll(documents)
+    }
 }
 ```
 
-통계 쿼리는 JPQL GROUP BY로 처리했다.
-
-```kotlin
-@Query("""
-    SELECT a.variantName, COUNT(a) FROM AbTestResult a
-    WHERE a.toggleName = :toggleName AND a.recordedAt >= :since
-    GROUP BY a.variantName
-""")
-fun countByVariantSince(toggleName: String, since: LocalDateTime): List<Array<Any>>
-```
+`shouldFail` 플래그로 ES 장애 시나리오도 테스트한다. 파이프라인이 예외를 잡아서 로그만 남기고 계속 살아있는지 확인하는 게 중요했다.
 
 ---
 
-구현 중에 실수가 하나 있었다. Flyway 마이그레이션을 V10으로 만들었는데, `V10__add_user_events_table.sql`이 이미 존재했다. 팀에서 쓰는 Flyway는 같은 버전 번호를 감지하면 바로 FlywayException을 던지고 컨텍스트 로딩이 실패한다. 당연히 SchemaMigrationTest가 터졌고, 그 컨텍스트 오염으로 JwtAuthenticationFilterTest 등 전혀 관련 없는 테스트들도 도미노처럼 실패했다. V14로 변경해서 해결했다.
+구현 중에 한 가지 확인이 필요했다. `spring-boot-starter-webflux`를 추가하면 WebMVC가 WebFlux로 교체되는 게 아닌지였다.
 
-또 H2 인라인 INDEX 문법 문제도 있었다. MariaDB에서는 CREATE TABLE 안에 `INDEX idx_name (col)` 형태가 가능하지만, H2는 이걸 모른다. `Unknown data type: "IDX_ABT_TOGGLE_RECORDED"` 에러가 떴다. CREATE INDEX를 별도 문장으로 분리하는 것으로 해결했다.
+결론은 안전하다. `spring-boot-starter-web`이 클래스패스에 있으면 `spring.main.web-application-type`이 `servlet`으로 고정된다. WebFlux가 함께 있어도 MVC 모드를 유지한다. Reactor는 파이프라인 내부용으로만 쓰이고, 기존 컨트롤러나 필터 체인에 영향을 주지 않는다.
 
-```sql
-CREATE TABLE IF NOT EXISTS ab_test_results (
-    id           BIGINT NOT NULL AUTO_INCREMENT,
-    toggle_name  VARCHAR(100) NOT NULL,
-    variant_name VARCHAR(100) NOT NULL,
-    user_id      VARCHAR(100),
-    session_id   VARCHAR(100),
-    payload      TEXT,
-    recorded_at  DATETIME NOT NULL,
-    PRIMARY KEY (id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_abt_toggle_recorded ON ab_test_results (toggle_name, recorded_at);
-```
-
-H2 호환을 체크하는 SchemaMigrationTest가 이런 이슈를 잡아주는 게 역시 중요하다.
+사실 `reactor-core`는 이미 transitive 의존성으로 들어와 있었다. GraphQL Subscription 때문에 `spring-boot-starter-graphql`이 `spring-webflux`를 끌어오고 있었다. webflux starter를 명시 추가한 건 Spring Boot의 자동 설정을 제대로 활성화하기 위해서였다.
 
 ---
 
-테스트는 FakeUnleash를 적극 활용했다. Unleash 공식 JAR에 `FakeUnleash`가 내장돼 있고, `setVariant(toggleName, Variant)` 메서드로 원하는 variant를 주입할 수 있다.
+테스트는 시간 기반이라 약간 주의가 필요하다.
 
 ```kotlin
 @Test
-fun `getVariant records result in store`() {
-    fakeUnleash.enable("my-toggle")
-    fakeUnleash.setVariant("my-toggle", Variant("B", null as String?, true))
-
-    service.getVariant("my-toggle", userId = "user1", sessionId = "sess-1")
-
-    assertEquals(1, fakeStore.saved.size)
-    assertEquals("B", fakeStore.saved.first().variantName)
+fun `emit single message is saved via store`() {
+    val msg = buildMessage("CREATE_RESUME", "SUCCESS")
+    pipeline.emit(msg)
+    Thread.sleep(300)
+    assertEquals(1, store.saved.size)
 }
 ```
 
-Kotlin에서 `Variant("B", null as String?, true)` — null에 타입 캐스팅이 필요한 게 약간 어색하지만, 생성자 오버로딩 매칭 때문에 어쩔 수 없었다.
+`bufferTimeout`이 100ms이니 300ms 정도 기다리면 배치가 플러시된다. CI 환경에서 타이밍이 빡빡하면 실패할 수도 있는 구조인데, Reactor의 `StepVerifier`와 `VirtualTimeScheduler`를 쓰면 가상 시간으로 테스트할 수 있다. 지금은 단순하게 `Thread.sleep`으로 처리했다.
+
+파이프라인 통계는 `/api/audit/pipeline/stats`로 조회할 수 있다.
+
+```json
+{
+  "processed": 1247,
+  "dropped": 0
+}
+```
+
+dropped가 0이면 버퍼가 충분한 것이고, 올라가기 시작하면 버퍼 크기나 ES 처리 속도를 점검해야 한다는 신호다.
 
 ---
 
-프론트엔드는 `/admin/ab-test` 페이지로 만들었다. variant 배정 테스트 폼, 토글별 분포 바 차트, 최근 배정 이력 테이블을 5초 polling으로 보여준다. Unleash 서버가 없는 환경에서는 "disabled" variant가 100% 나오지만 그것도 데이터로 기록된다.
+프론트엔드 `/admin/pipeline` 페이지에서 처리 건수, 드롭 건수, 드롭률을 5초 간격으로 모니터링할 수 있다. 파이프라인 구조도도 한눈에 보이게 배치했다. 운영 중에 드롭률이 1%를 넘으면 색이 빨갛게 바뀐다.
 
-지금 구조는 AOP에서 사용자 ID를 null로 처리하고 있는데, 실제로는 Spring Security의 SecurityContextHolder에서 현재 로그인 사용자를 꺼내 넣어주는 게 맞다. 다음 단계로 퍼널 이벤트(`UserEvent`)와 연결할 때 같이 처리할 것 같다.
+지금 구조에서 개선할 여지가 있다면 드롭된 메시지의 DLQ 연동이다. 현재는 드롭 카운트만 올라가고 해당 메시지는 사라진다. 버퍼가 꽉 찰 정도의 폭주라면 그 메시지들도 기록이 필요한데, 드롭 핸들러에서 DLQ로 라우팅하는 것이 다음 단계다.

@@ -122,6 +122,12 @@
 ## 비동기 / 이벤트
 - Spring Modulith 이벤트 퍼블리케이션 (@ApplicationModuleListener + JPA outbox)
 - RabbitMQ 감사 로그 파이프라인 (AuditLogAspect → RabbitMQ → ES 인덱싱)
+- 백프레셔 제어 비동기 파이프라인 (Reactive Backpressure Pipeline)
+  - AuditLogConsumer → Sinks.many().multicast().onBackpressureBuffer(1000) emit으로 교체
+  - ReactiveAuditPipeline: bufferTimeout(50, 100ms) 배치 + Schedulers.boundedElastic() 비동기 ES 저장
+  - AuditLogStore 포트 인터페이스 + JpaAuditLogStore 어댑터
+  - GET /api/audit/pipeline/stats (processed/dropped 카운터)
+  - 프론트엔드: /admin/pipeline 대시보드 (처리 건수·드롭률·파이프라인 구조도, 5s polling)
 - Webhook 발송 시스템 — OkHttp3 HMAC 서명, 지수 백오프 재시도, 발송 로그
 - GraphQL Subscription 실시간 알림 (graphql-transport-ws 프로토콜)
   - ApplicationSubscriptionService: Sinks.many().multicast() 기반 Flux 스트림, 유저별 필터링
