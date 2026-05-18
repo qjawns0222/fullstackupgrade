@@ -36,7 +36,7 @@ class SecurityConfig(
                 .cors { it.configurationSource(corsConfigurationSource()) }
                 .sessionManagement { it.sessionCreationPolicy(SessionCreationPolicy.STATELESS) }
                 .authorizeHttpRequests { auth ->
-                    auth.requestMatchers("/api/auth/**", "/actuator/**", "/graphiql", "/graphiql/**", "/api/cache/**", "/api/query-monitor/**", "/api/logs/**", "/api/sanitizer/**", "/api/perf/**", "/api/sentry/**", "/api/api-changes/**", "/api/notifications/**", "/api/query-hints/**", "/api/ab-test/**", "/api/audit/pipeline/**").permitAll()
+                    auth.requestMatchers("/api/auth/**", "/actuator/**", "/graphiql", "/graphiql/**", "/api/cache/**", "/api/query-monitor/**", "/api/logs/**", "/api/sanitizer/**", "/api/perf/**", "/api/sentry/**", "/api/api-changes/**", "/api/notifications/**", "/api/query-hints/**", "/api/ab-test/**", "/api/audit/pipeline/**", "/api/vault/**").permitAll()
                     auth.anyRequest().authenticated()
                 }
                 .addFilterBefore(

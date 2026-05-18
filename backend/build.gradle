@@ -194,6 +194,10 @@ dependencies {
 
     // Spring AI: LLM Resume Scoring with OpenAI GPT-4o-mini
     implementation 'org.springframework.ai:spring-ai-openai-spring-boot-starter:1.0.0-M6'
+
+    // Spring Cloud Vault: Secret Management (KV engine)
+    implementation 'org.springframework.cloud:spring-cloud-vault-config:4.1.4'
+    implementation 'org.springframework.cloud:spring-cloud-starter-vault-config:4.1.4'
 }
 
 tasks.named('test') {

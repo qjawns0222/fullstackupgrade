@@ -161,6 +161,9 @@ sentry:
   enable-user-interaction-tracing: true
   send-default-pii: true
 
+vault:
+  enabled: false
+
 org:
   jobrunr:
     background-job-server:
