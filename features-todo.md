@@ -9,12 +9,7 @@
 
 ---
 
-1. **시크릿 볼트 통합 (HashiCorp Vault Secret Management)**
-   - 문제: application.yml에 DB 패스워드·Gmail 앱 비밀번호·JWT 시크릿이 평문으로 하드코딩되어 있음
-   - 해결: Spring Cloud Vault 연동, bootstrap.yml로 Vault KV 엔진에서 시크릿 로딩 + 로컬 개발용 dotenv 폴백
-   - 신규 라이브러리: `org.springframework.cloud:spring-cloud-starter-vault-config:4.1.1`
-
-2. **분산 잡 오케스트레이션 (Distributed Job Orchestration with DAG)**
+1. **분산 잡 오케스트레이션 (Distributed Job Orchestration with DAG)**
    - 문제: Spring Batch 주간 트렌드 분석 Job이 단일 스텝 선형 실행이라 스텝 간 의존성·병렬 실행·실패 스텝 재시도 전략이 없음
    - 해결: Spring Batch Flow DSL로 DAG 형태 Step 의존성 정의 — 병렬 파티셔닝(PartitionStep), 조건 분기(JobExecutionDecider), 실패 스텝 자동 재시작
    - 신규 라이브러리: `org.springframework.boot:spring-boot-starter-batch` (이미 있음), Batch Flow API 활용

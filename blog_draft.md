@@ -1,137 +1,201 @@
-[Fullstack] 백프레셔 제어 비동기 파이프라인 - RabbitMQ 메시지 폭주를 Reactor Flux로 막다
+[Fullstack] HashiCorp Vault 시크릿 관리 - application.yml 평문 비밀번호를 없애다
 
 ---
 
-감사 로그 파이프라인이 언제 터질지 모른다는 불안감이 있었다.
+application.yml 파일을 열면 DB 비밀번호, Gmail 앱 비밀번호, JWT 시크릿이 그대로 적혀 있다. 로컬 개발 환경이라 넘어가고 있었지만, 코드베이스를 들여다볼 때마다 찜찜했다. Git 이력에 박혀있는 평문 시크릿은 한 번 올라가면 지울 수 없다. 언젠가 레포지토리를 공개하거나 팀원이 생기는 순간 문제가 된다.
 
-`@RabbitListener`가 메시지를 받으면 Elasticsearch에 건건이 동기 저장한다. 평소엔 문제없다. 그런데 트래픽이 몰려서 RabbitMQ에 메시지가 쌓이기 시작하면? Spring AMQP의 기본 concurrency는 스레드 풀로 돌아가는데, ES 응답이 느려지면 그 스레드들이 전부 I/O 대기 상태로 막힌다. 스레드 풀이 고갈되면 새 메시지 처리가 밀리고, 결국 RabbitMQ consumer가 멈추는 상황이 올 수 있다.
-
-배치 저장도 없었다. 메시지 100개가 오면 ES에 100번 HTTP 요청을 보낸다. 비효율도 비효율이지만, ES가 잠깐 느려지는 순간 그 100개가 전부 블로킹 대기로 쌓인다.
-
-해결 방향은 명확했다. `@RabbitListener`는 메시지를 받는 즉시 Reactor `Sink`에 emit만 하고 리턴한다. 실제 저장은 Flux 파이프라인이 비동기로 처리한다. 버퍼가 있으니 ES가 잠깐 느려져도 메시지가 버퍼에서 기다리고, 스레드 풀은 자유롭다.
+HashiCorp Vault를 붙이기로 했다. Spring Cloud Vault가 있으니 설정만 잘 맞추면 될 거라고 생각했는데, 생각보다 신경 써야 할 부분이 있었다.
 
 ---
 
-핵심은 `ReactiveAuditPipeline`이다.
+가장 먼저 부딪힌 문제는 `spring.config.import=optional:vault://` 설정이었다.
+
+Spring Cloud Vault 4.x는 bootstrap.yml 방식 대신 `spring.config.import`를 쓴다. 공식 문서대로 `application.yml`에 추가했더니 전체 테스트가 무더기로 실패했다. 단독으로 돌리면 통과하는 테스트들이 전체 실행에서는 죄다 깨진다.
+
+원인은 Spring Boot 3.2의 컨텍스트 로딩 순서 문제였다. `spring-cloud-vault-config`가 클래스패스에 있으면 `ConfigDataEnvironmentPostProcessor`가 Vault 연결을 시도하고, 테스트 컨텍스트 초기화 단계에서 연결 실패가 전파된다. `optional:` 접두사가 있어도 환경에 따라 컨텍스트 자체가 오염된다.
+
+해결 방법은 간단했다. `application.yml`에 `spring.config.import`를 넣지 않고, `application-vault.yml` 프로파일에만 Vault 설정을 격리하는 것이다. 로컬에서는 `vault.enabled=false`가 기본값이고, 프로덕션에서는 `--spring.profiles.active=vault`로 활성화한다.
+
+```yaml
+# application.yml (기본)
+vault:
+  enabled: false
+
+# application-vault.yml (프로파일 활성화 시에만 로딩)
+spring:
+  cloud:
+    vault:
+      uri: ${VAULT_URI:http://localhost:8200}
+      authentication: TOKEN
+      token: ${VAULT_TOKEN:}
+      kv:
+        enabled: true
+        backend: secret
+        application-name: aiblog
+      fail-fast: false
+
+vault:
+  enabled: true
+  uri: ${VAULT_URI:http://localhost:8200}
+```
+
+`fail-fast: false`가 중요하다. Vault에 연결이 안 되더라도 애플리케이션이 시작되게 한다. 연결 실패 시 헬스체크에서 DOWN으로 표시되면 충분하고, 앱 자체가 죽으면 곤란하다.
+
+---
+
+핵심 구조는 세 파일이다.
+
+`VaultConfig.kt`는 `@ConfigurationProperties`로 `vault.*` 설정을 읽어 `VaultConfigurationStatus` 빈을 만든다. 이 빈이 Vault 활성화 여부와 연결 정보를 담는다.
 
 ```kotlin
-@Component
-class ReactiveAuditPipeline(private val auditLogStore: AuditLogStore) {
+@ConfigurationProperties(prefix = "vault")
+data class VaultProperties(
+    val enabled: Boolean = false,
+    val uri: String = "http://localhost:8200",
+    val token: String = "",
+    val kv: KvProperties = KvProperties()
+) {
+    data class KvProperties(
+        val backend: String = "secret",
+        val applicationName: String = "aiblog"
+    )
+}
 
-    private val sink = Sinks.many().multicast().onBackpressureBuffer<AuditLogMessage>(1000)
+@Configuration
+@EnableConfigurationProperties(VaultProperties::class)
+class VaultConfig(private val vaultProperties: VaultProperties) {
 
-    @PostConstruct
-    fun start() {
-        sink.asFlux()
-            .onBackpressureBuffer(1000) { dropped ->
-                droppedCount.incrementAndGet()
-                log.warn("Audit message dropped due to backpressure: action={}", dropped.action)
-            }
-            .bufferTimeout(50, Duration.ofMillis(100))
-            .filter { it.isNotEmpty() }
-            .publishOn(Schedulers.boundedElastic())
-            .subscribe(
-                { batch -> processBatch(batch) },
-                { err -> log.error("Audit pipeline error", err) }
+    @Bean
+    fun vaultConfigurationStatus(): VaultConfigurationStatus {
+        return if (vaultProperties.enabled) {
+            log.info("Vault integration enabled — uri={}", vaultProperties.uri)
+            VaultConfigurationStatus(
+                enabled = true,
+                uri = vaultProperties.uri,
+                kvBackend = vaultProperties.kv.backend,
+                applicationName = vaultProperties.kv.applicationName
             )
-    }
-
-    fun emit(message: AuditLogMessage) {
-        val result = sink.tryEmitNext(message)
-        if (result.isFailure) {
-            droppedCount.incrementAndGet()
+        } else {
+            log.warn("Vault integration disabled — secrets loaded from application.yml (dev mode)")
+            VaultConfigurationStatus(enabled = false)
         }
     }
 }
 ```
 
-`Sinks.many().multicast().onBackpressureBuffer(1000)` — 이 Sink는 구독자가 없어도 최대 1000개를 버퍼에 보관한다. emit은 논블로킹이라 `@RabbitListener` 스레드가 즉시 리턴한다.
-
-`bufferTimeout(50, Duration.ofMillis(100))` — 50개가 쌓이거나 100ms가 지나면 리스트로 묶어 내려보낸다. 이게 배치 저장의 트리거다.
-
-`publishOn(Schedulers.boundedElastic())` — ES HTTP 호출처럼 블로킹 I/O가 있는 작업을 별도 스레드 풀에서 실행한다. 메인 이벤트 루프를 막지 않는다.
-
-`AuditLogConsumer`는 이제 이렇게 단순해졌다.
+`VaultSecretsHealthIndicator.kt`는 Actuator `HealthIndicator`를 구현한다. Vault가 비활성화면 `UP`에 `local-fallback` 모드를 달아 반환하고, 활성화면 Vault `/v1/sys/health`를 직접 호출해서 initialized/sealed 상태를 확인한다.
 
 ```kotlin
-@RabbitListener(queues = [RabbitMqConfig.AUDIT_QUEUE])
-fun receiveAuditLog(message: AuditLogMessage) {
-    pipeline.emit(message)
-}
-```
-
-받자마자 Sink에 던지고 끝이다. ES 응답 속도와 무관하게 스레드가 바로 풀린다.
-
----
-
-데이터 레이어는 포트 인터페이스로 분리했다.
-
-```kotlin
-interface AuditLogStore {
-    fun saveAll(documents: List<AuditLogDocument>)
-}
-
 @Component
-class JpaAuditLogStore(private val repository: AuditLogRepository) : AuditLogStore {
-    override fun saveAll(documents: List<AuditLogDocument>) {
-        repository.saveAll(documents)
+class VaultSecretsHealthIndicator(
+    private val vaultConfigurationStatus: VaultConfigurationStatus
+) : HealthIndicator {
+
+    override fun health(): Health {
+        if (!vaultConfigurationStatus.enabled) {
+            return Health.up()
+                .withDetail("mode", "local-fallback")
+                .withDetail("message", "Vault disabled — using application.yml secrets")
+                .build()
+        }
+
+        return runCatching {
+            val rt = RestTemplate()
+            val sysHealth = rt.getForObject(
+                "${vaultConfigurationStatus.uri}/v1/sys/health", Map::class.java
+            )
+            val initialized = sysHealth?.get("initialized") as? Boolean ?: false
+            val sealed = sysHealth?.get("sealed") as? Boolean ?: true
+
+            if (initialized && !sealed) {
+                Health.up()
+                    .withDetail("mode", "vault")
+                    .withDetail("initialized", initialized)
+                    .withDetail("sealed", sealed)
+                    .build()
+            } else {
+                Health.down()
+                    .withDetail("initialized", initialized)
+                    .withDetail("sealed", sealed)
+                    .build()
+            }
+        }.getOrElse { ex ->
+            Health.down()
+                .withDetail("error", ex.message ?: "connection failed")
+                .withException(ex)
+                .build()
+        }
     }
 }
 ```
 
-서비스가 `ElasticsearchRepository`를 직접 알 필요가 없다. 테스트에서 `FakeAuditLogStore`를 10줄로 만들어 쓸 수 있다.
+`runCatching`으로 연결 실패를 조용히 처리한다. Vault 서버가 없는 로컬 개발환경에서 헬스체크 때문에 로그가 빨개지는 걸 원하지 않는다.
+
+`VaultSecretsController.kt`는 `/api/vault/status`와 `/api/vault/secrets/manifest` 두 엔드포인트를 제공한다. status는 현재 연결 상태를, manifest는 어떤 시크릿이 Vault에서 관리되는지 목록을 반환한다.
 
 ```kotlin
-class FakeAuditLogStore : AuditLogStore {
-    val saved = mutableListOf<AuditLogDocument>()
-    var shouldFail = false
-
-    override fun saveAll(documents: List<AuditLogDocument>) {
-        if (shouldFail) throw RuntimeException("Simulated ES failure")
-        saved.addAll(documents)
-    }
+@GetMapping("/secrets/manifest")
+fun secretsManifest(): SecretsManifestResponse {
+    return SecretsManifestResponse(
+        secrets = listOf(
+            SecretEntry("spring.datasource.password", "DB 비밀번호", vaultConfigurationStatus.enabled),
+            SecretEntry("spring.mail.password", "Gmail 앱 비밀번호", vaultConfigurationStatus.enabled),
+            SecretEntry("jwt.secret", "JWT 서명 키", vaultConfigurationStatus.enabled),
+            SecretEntry("aws.s3.access-key", "MinIO 액세스 키", vaultConfigurationStatus.enabled),
+            SecretEntry("aws.s3.secret-key", "MinIO 시크릿 키", vaultConfigurationStatus.enabled)
+        )
+    )
 }
 ```
 
-`shouldFail` 플래그로 ES 장애 시나리오도 테스트한다. 파이프라인이 예외를 잡아서 로그만 남기고 계속 살아있는지 확인하는 게 중요했다.
+`managedByVault` 플래그가 false면 프론트엔드에서 "application.yml" 배지를 표시한다. Vault가 켜지면 자동으로 "Vault" 배지로 바뀐다.
 
 ---
 
-구현 중에 한 가지 확인이 필요했다. `spring-boot-starter-webflux`를 추가하면 WebMVC가 WebFlux로 교체되는 게 아닌지였다.
-
-결론은 안전하다. `spring-boot-starter-web`이 클래스패스에 있으면 `spring.main.web-application-type`이 `servlet`으로 고정된다. WebFlux가 함께 있어도 MVC 모드를 유지한다. Reactor는 파이프라인 내부용으로만 쓰이고, 기존 컨트롤러나 필터 체인에 영향을 주지 않는다.
-
-사실 `reactor-core`는 이미 transitive 의존성으로 들어와 있었다. GraphQL Subscription 때문에 `spring-boot-starter-graphql`이 `spring-webflux`를 끌어오고 있었다. webflux starter를 명시 추가한 건 Spring Boot의 자동 설정을 제대로 활성화하기 위해서였다.
-
----
-
-테스트는 시간 기반이라 약간 주의가 필요하다.
+테스트는 인프라 의존성 없이 순수 단위 테스트로 작성했다.
 
 ```kotlin
 @Test
-fun `emit single message is saved via store`() {
-    val msg = buildMessage("CREATE_RESUME", "SUCCESS")
-    pipeline.emit(msg)
-    Thread.sleep(300)
-    assertEquals(1, store.saved.size)
+fun `vault disabled returns UP with local-fallback mode`() {
+    val status = VaultConfigurationStatus(enabled = false)
+    val indicator = VaultSecretsHealthIndicator(status)
+
+    val health = indicator.health()
+
+    assertEquals("UP", health.status.code)
+    assertEquals("local-fallback", health.details["mode"])
+}
+
+@Test
+fun `vault enabled but unreachable returns DOWN`() {
+    val status = VaultConfigurationStatus(
+        enabled = true,
+        uri = "http://localhost:19999"  // 없는 포트
+    )
+    val indicator = VaultSecretsHealthIndicator(status)
+
+    val health = indicator.health()
+
+    assertEquals("DOWN", health.status.code)
 }
 ```
 
-`bufferTimeout`이 100ms이니 300ms 정도 기다리면 배치가 플러시된다. CI 환경에서 타이밍이 빡빡하면 실패할 수도 있는 구조인데, Reactor의 `StepVerifier`와 `VirtualTimeScheduler`를 쓰면 가상 시간으로 테스트할 수 있다. 지금은 단순하게 `Thread.sleep`으로 처리했다.
-
-파이프라인 통계는 `/api/audit/pipeline/stats`로 조회할 수 있다.
-
-```json
-{
-  "processed": 1247,
-  "dropped": 0
-}
-```
-
-dropped가 0이면 버퍼가 충분한 것이고, 올라가기 시작하면 버퍼 크기나 ES 처리 속도를 점검해야 한다는 신호다.
+Vault 서버 없이 비활성 모드, 연결 불가 모드, manifest 목록을 모두 검증한다. `@SpringBootTest` 없이 도는 테스트라 빠르다.
 
 ---
 
-프론트엔드 `/admin/pipeline` 페이지에서 처리 건수, 드롭 건수, 드롭률을 5초 간격으로 모니터링할 수 있다. 파이프라인 구조도도 한눈에 보이게 배치했다. 운영 중에 드롭률이 1%를 넘으면 색이 빨갛게 바뀐다.
+프론트엔드는 `/admin/vault` 페이지로 만들었다. 현재 모드(local-fallback / vault), 연결 상태, 시크릿 목록을 5초 간격으로 폴링한다. Vault가 비활성화 상태면 노란 박스로 프로파일 활성화 방법을 안내한다.
 
-지금 구조에서 개선할 여지가 있다면 드롭된 메시지의 DLQ 연동이다. 현재는 드롭 카운트만 올라가고 해당 메시지는 사라진다. 버퍼가 꽉 찰 정도의 폭주라면 그 메시지들도 기록이 필요한데, 드롭 핸들러에서 DLQ로 라우팅하는 것이 다음 단계다.
+```
+--spring.profiles.active=vault
+VAULT_URI=http://your-vault:8200
+VAULT_TOKEN=your-token
+```
+
+이 세 가지만 설정하면 `application-vault.yml`이 로딩되면서 Spring Cloud Vault가 KV 엔진에서 시크릿을 가져온다.
+
+---
+
+이번 구현의 핵심은 로컬 개발을 깨뜨리지 않으면서 프로덕션에서는 Vault를 쓸 수 있는 구조를 만드는 것이었다. `optional:vault://` 한 줄로 해결하려다가 테스트 전체가 깨지는 걸 경험하고 나서야 프로파일 분리가 올바른 방향임을 확신했다.
+
+application.yml에 아직 평문으로 남아있는 시크릿들은 Vault 프로파일을 활성화하면 KV 엔진의 `secret/aiblog` 경로에서 덮어쓰기된다. Git 이력에 남아있는 건 어쩔 수 없지만, 적어도 앞으로는 새 시크릿이 코드베이스에 들어가지 않는다.

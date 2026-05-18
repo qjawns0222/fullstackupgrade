@@ -58,6 +58,12 @@
   - 프론트엔드: /admin/api-changes 대시보드 (Breaking Change 목록 + 스냅샷 이력 탭)
 
 ## 보안 / 인증
+- HashiCorp Vault 시크릿 관리 (Spring Cloud Vault 4.1.4)
+  - VaultProperties @ConfigurationProperties + VaultConfigurationStatus Bean
+  - VaultSecretsHealthIndicator: Actuator 헬스체크 (local-fallback / Vault 연결 상태)
+  - application-vault.yml 프로파일: --spring.profiles.active=vault + VAULT_URI/VAULT_TOKEN 환경변수로 활성화
+  - GET /api/vault/status, GET /api/vault/secrets/manifest REST API
+  - 프론트엔드: /admin/vault 대시보드 (모드·연결상태·시크릿 목록, 5s polling)
 - JWT 인증 필터 + Refresh Token rotation (Redis)
 - MFA/TOTP 2단계 인증 (dev.samstevens.totp)
 - Guava BloomFilter 기반 토큰 블랙리스트 (Redis 전 인메모리 사전 필터)
